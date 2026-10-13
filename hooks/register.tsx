@@ -429,19 +429,20 @@ export const register: Register = (on, options) => {
     for (const d of activity.days) {
       for (const [name, m] of Object.entries(d.models)) models.set(name, addMetrics(models.get(name) ?? emptyMetrics(), m))
     }
-    const topModels = [...models].sort((a, b) => b[1].spend - a[1].spend).slice(0, 5)
+    const allModels = [...models].sort((a, b) => b[1].spend - a[1].spend)
     const totalSpend = activity.total.spend
 
     const sparkDays = activity.days.slice(-14)
     const sparkValues = sparkDays.map(d => d.metrics.spend)
-    const sparkCols = Math.min(paneCols - 2, Math.max(1, sparkValues.length * 2))
+    const colsPerDay = sparkValues.length > 0 ? Math.max(2, Math.floor((paneCols - 2) / sparkValues.length)) : 2
+    const sparkCols = Math.min(paneCols - 2, sparkValues.length * colsPerDay)
     const sparkRows = 7
 
-    const modelShares = topModels.map(([, m], i) => ({
+    const modelShares = allModels.map(([, m], i) => ({
       ratio: totalSpend > 0 ? m.spend / totalSpend : 0,
       color: MODEL_COLORS[i % MODEL_COLORS.length]!,
     }))
-    const modelBarWidth = Math.min(30, Math.max(10, paneCols - 4))
+    const modelBarWidth = Math.min(paneCols - 4, Math.max(10, paneCols - 4))
 
     const cacheHit = activity.total.promptTokens > 0
       ? Math.round((activity.total.cacheRead / activity.total.promptTokens) * 100)
@@ -458,8 +459,7 @@ export const register: Register = (on, options) => {
     const todayTips = todayDay ? tips(todayDay, 0) : []
     const paneSparkValues: number[] = []
     for (const v of sparkValues) {
-      paneSparkValues.push(v)
-      paneSparkValues.push(v)
+      for (let c = 0; c < colsPerDay; c++) paneSparkValues.push(v)
     }
 
     return (
@@ -499,7 +499,7 @@ export const register: Register = (on, options) => {
         {modelShares.length > 0 && (
           <Raster key="model-bar" columns={modelBarWidth} rows={1} cells={modelBarRasterCells(modelShares, modelBarWidth)} />
         )}
-        {topModels.map(([name, m], i) => {
+        {allModels.map(([name, m], i) => {
           const short = name.replace(/^.*\//, '')
           const pct = totalSpend > 0 ? Math.round((m.spend / totalSpend) * 100) : 0
           return (

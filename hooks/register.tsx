@@ -156,6 +156,29 @@ export const register: Register = (on, options) => {
     }
   }
 
+  function paneTipFromActivity(activity: Activity, today: Day | undefined, b: Budgets): string | undefined {
+    const t = activity.total
+    if (!today) return undefined
+    const m = today.metrics
+    const todayModels = Object.entries(today.models).filter(([, mm]) => mm.spend > 0.1)
+    const opus = todayModels.find(([n]) => /opus/i.test(n))
+    if (opus && m.spend > 0 && opus[1].spend / m.spend > 0.7) {
+      const pct = Math.round((opus[1].spend / m.spend) * 100)
+      return `🧠 Ma ${pct}% Opus. Rutinmunkára a /model sonnet olcsóbb.`
+    }
+    const input = m.promptTokens
+    if (input > 500_000 && m.cacheRead / input < 0.7) {
+      return `🧊 Cache hit ma csak ${Math.round((m.cacheRead / input) * 100)}%. Modellváltás és /clear rontja.`
+    }
+    if (b.daily > 0 && m.spend > b.daily * 0.5) {
+      return `⚡ A napi keret ${Math.round((m.spend / b.daily) * 100)}%-ánál jársz.`
+    }
+    if (t.cacheSaved > t.spend * 0.5) {
+      return `🦸 A cache eddig ${money(t.cacheSaved)}-t spórolt neked!`
+    }
+    return undefined
+  }
+
   function overScopes(): Scope[] {
     if (!snap) return []
     return (Object.entries(ratios(spendOf(snap), budgets)) as [Scope, number][]).filter(([, r]) => r >= 1).map(([s]) => s)
@@ -453,6 +476,7 @@ export const register: Register = (on, options) => {
 
     const todayDay = activity.days.find(d => d.date === date)
     const todayTips = todayDay ? tips(todayDay, 0) : []
+    const paneTip = todayTips[0] ?? paneTipFromActivity(activity, todayDay, budgets)
     const paneSparkValues: number[] = []
     for (const v of sparkValues) {
       for (let c = 0; c < colsPerDay; c++) paneSparkValues.push(v)
@@ -523,11 +547,11 @@ export const register: Register = (on, options) => {
           </Box>
         )}
 
-        {todayTips.length > 0 && (
+        {paneTip !== undefined && (
           <Box flexDirection="column">
             <Text> </Text>
             <Text bold>Tipp</Text>
-            <Text dimColor>{todayTips[0]}</Text>
+            <Text dimColor>{paneTip}</Text>
           </Box>
         )}
       </Box>

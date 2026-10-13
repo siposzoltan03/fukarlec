@@ -19,15 +19,20 @@ máshol némán nem csinál semmit.
 
 A napok UTC szerint értendők, ahogy a LiteLLM számol.
 
-## Telepítés (work profil)
+## Telepítés
 
 ```
-claude-work
+/plugin install fukarlec --marketplace siposzoltan03/fukarlec
+```
+
+Lokális fejlesztéshez (ha klónoztad a repót):
+
+```
 /plugin marketplace add ~/projects/fukarlec
 /plugin install fukarlec@fukarlec
 ```
 
-Mivel a marketplace egy helyi mappa, a szerkesztések után elég egy `/reload-plugins`.
+Lokális marketplace esetén a szerkesztések után elég egy `/reload-plugins`.
 
 ## Beállítás
 

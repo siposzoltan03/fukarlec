@@ -156,7 +156,7 @@ export const register: Register = (on, options) => {
     }
   }
 
-  function paneTipFromActivity(activity: Activity, today: Day | undefined, b: Budgets): string | undefined {
+  function paneTipFromActivity(activity: Activity, today: Day | undefined, _b: Budgets): string | undefined {
     const t = activity.total
     if (!today) return undefined
     const m = today.metrics
@@ -164,19 +164,22 @@ export const register: Register = (on, options) => {
     const opus = todayModels.find(([n]) => /opus/i.test(n))
     if (opus && m.spend > 0 && opus[1].spend / m.spend > 0.7) {
       const pct = Math.round((opus[1].spend / m.spend) * 100)
-      return `🧠 Ma ${pct}% Opus. Rutinmunkára a /model sonnet olcsóbb.`
+      return `🧠 Ma ${pct}% Opus. Rutinmunkára /model sonnet olcsóbb.`
     }
     const input = m.promptTokens
     if (input > 500_000 && m.cacheRead / input < 0.7) {
-      return `🧊 Cache hit ma csak ${Math.round((m.cacheRead / input) * 100)}%. Modellváltás és /clear rontja.`
+      return `🧊 Cache hit ma ${Math.round((m.cacheRead / input) * 100)}%. Modellváltás és /clear rontja.`
     }
-    if (b.daily > 0 && m.spend > b.daily * 0.5) {
-      return `⚡ A napi keret ${Math.round((m.spend / b.daily) * 100)}%-ánál jársz.`
+    if (m.completionTokens > 0 && m.promptTokens / m.completionTokens > 15) {
+      return '📐 Hosszú context, kevés output — /compact csökkenti a prompt tokent.'
     }
-    if (t.cacheSaved > t.spend * 0.5) {
-      return `🦸 A cache eddig ${money(t.cacheSaved)}-t spórolt neked!`
+    if (todayModels.length > 3) {
+      return `🔀 Ma ${todayModels.length} modellt használtál. Modellváltás cache-t invalidál.`
     }
-    return undefined
+    if (t.cacheSaved > 0) {
+      return `🦸 A cache eddig ${money(t.cacheSaved)}-t spórolt — ${Math.round(t.cacheSaved / (t.spend + t.cacheSaved) * 100)}% megtakarítás.`
+    }
+    return '💡 /compact a session közepén: kisebb context = kevesebb token/kör.'
   }
 
   function overScopes(): Scope[] {

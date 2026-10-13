@@ -5,6 +5,7 @@ import { addMetrics, emptyMetrics, fetchActivity, fetchKeySpend, makeConn } from
 import type { Activity, Conn, Day, Fetch, Metrics } from './litellm'
 import {
   addDays,
+  colorDotRasterCells,
   gaugeRasterCells,
   inKind,
   MODEL_COLORS,
@@ -448,11 +449,6 @@ export const register: Register = (on, options) => {
       ? Math.round((activity.total.cacheRead / activity.total.promptTokens) * 100)
       : 0
 
-    const colorDot = (i: number) => {
-      const hex = MODEL_COLORS[i % MODEL_COLORS.length]!.toString(16).padStart(6, '0')
-      return `#${hex}`
-    }
-
     const streakDays = budgets.daily > 0 ? streak(activity.days, date, budgets.daily) : 0
 
     const todayDay = activity.days.find(d => d.date === date)
@@ -490,7 +486,11 @@ export const register: Register = (on, options) => {
         )}
         {sparkDays.length > 0 && (
           <Text dimColor>
-            {sparkDays[0]!.date.slice(5)}{'                              '.slice(0, Math.max(0, sparkCols - 10))}{sparkDays[sparkDays.length - 1]!.date.slice(5)}
+            {sparkDays.map((d, i) => {
+              const label = d.date.slice(8)
+              const pad = colsPerDay - label.length
+              return i < sparkDays.length - 1 ? label + ' '.repeat(Math.max(0, pad)) : label
+            }).join('')}
           </Text>
         )}
 
@@ -502,10 +502,11 @@ export const register: Register = (on, options) => {
         {allModels.map(([name, m], i) => {
           const short = name.replace(/^.*\//, '')
           const pct = totalSpend > 0 ? Math.round((m.spend / totalSpend) * 100) : 0
+          const dotColor = MODEL_COLORS[i % MODEL_COLORS.length]!
           return (
             <Box key={`model-${i}`}>
-              <Text color={colorDot(i)}>{'█'} </Text>
-              <Text dimColor>{short} {money(m.spend)} ({pct}%)</Text>
+              <Raster key={`dot-${i}`} columns={1} rows={1} cells={colorDotRasterCells(dotColor)} />
+              <Text dimColor> {short} {money(m.spend)} ({pct}%)</Text>
             </Box>
           )
         })}

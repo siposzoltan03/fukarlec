@@ -315,7 +315,13 @@ export function modelBarRasterCells(shares: { ratio: number; color: number }[], 
   return uint32ToBase64(words)
 }
 
-export const MODEL_COLORS = [0x3b82f6, 0xa855f7, 0x22c55e, 0xf97316, 0xeab308, 0x06b6d4]
+export const MODEL_COLORS = [0x3b82f6, 0xa855f7, 0x22c55e, 0xf97316, 0xeab308, 0x06b6d4, 0xec4899]
+
+/** 1×1 Raster cell of a single color (for legend dots matching bar colors exactly). */
+export function colorDotRasterCells(color: number): string {
+  const words = Uint32Array.of(0x2588, color, DEFAULT_BG)
+  return uint32ToBase64(words)
+}
 
 function uint32ToBase64(arr: Uint32Array): string {
   const bytes = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength)

@@ -6,6 +6,7 @@ import type { Activity, Conn, Day, Fetch, Metrics } from './litellm'
 import {
   addDays,
   gaugeRasterCells,
+  inKind,
   MODEL_COLORS,
   modelBarRasterCells,
   money,
@@ -433,8 +434,8 @@ export const register: Register = (on, options) => {
 
     const sparkDays = activity.days.slice(-14)
     const sparkValues = sparkDays.map(d => d.metrics.spend)
-    const sparkCols = Math.min(paneCols - 2, sparkValues.length)
-    const sparkRows = 5
+    const sparkCols = Math.min(paneCols - 2, Math.max(1, sparkValues.length * 2))
+    const sparkRows = 7
 
     const modelShares = topModels.map(([, m], i) => ({
       ratio: totalSpend > 0 ? m.spend / totalSpend : 0,
@@ -445,6 +446,21 @@ export const register: Register = (on, options) => {
     const cacheHit = activity.total.promptTokens > 0
       ? Math.round((activity.total.cacheRead / activity.total.promptTokens) * 100)
       : 0
+
+    const colorDot = (i: number) => {
+      const hex = MODEL_COLORS[i % MODEL_COLORS.length]!.toString(16).padStart(6, '0')
+      return `#${hex}`
+    }
+
+    const streakDays = budgets.daily > 0 ? streak(activity.days, date, budgets.daily) : 0
+
+    const todayDay = activity.days.find(d => d.date === date)
+    const todayTips = todayDay ? tips(todayDay, 0) : []
+    const paneSparkValues: number[] = []
+    for (const v of sparkValues) {
+      paneSparkValues.push(v)
+      paneSparkValues.push(v)
+    }
 
     return (
       <Box flexDirection="column">
@@ -469,8 +485,13 @@ export const register: Register = (on, options) => {
             key="pane-spark"
             columns={sparkCols}
             rows={sparkRows}
-            cells={sparklineRasterCells(sparkValues, sparkCols, sparkRows, budgets.daily)}
+            cells={sparklineRasterCells(paneSparkValues, sparkCols, sparkRows, budgets.daily)}
           />
+        )}
+        {sparkDays.length > 0 && (
+          <Text dimColor>
+            {sparkDays[0]!.date.slice(5)}{'                              '.slice(0, Math.max(0, sparkCols - 10))}{sparkDays[sparkDays.length - 1]!.date.slice(5)}
+          </Text>
         )}
 
         <Text> </Text>
@@ -482,15 +503,32 @@ export const register: Register = (on, options) => {
           const short = name.replace(/^.*\//, '')
           const pct = totalSpend > 0 ? Math.round((m.spend / totalSpend) * 100) : 0
           return (
-            <Text key={`model-${i}`} dimColor>
-              {'  '}{short} {money(m.spend)} ({pct}%)
-            </Text>
+            <Box key={`model-${i}`}>
+              <Text color={colorDot(i)}>{'█'} </Text>
+              <Text dimColor>{short} {money(m.spend)} ({pct}%)</Text>
+            </Box>
           )
         })}
 
         <Text> </Text>
         <Text dimColor>Cache: {cacheHit}% hit, {money(activity.total.cacheSaved)} megtakarítás</Text>
         <Text dimColor>Összesen: {money(totalSpend)} · {activity.total.requests} kérés</Text>
+
+        {isFun && (
+          <Box flexDirection="column">
+            <Text> </Text>
+            <Text>{inKind(totalSpend, hufRate)}</Text>
+            {streakDays >= 2 && <Text color="#22c55e">{'🏆'} {streakDays} napja kereten belül!</Text>}
+          </Box>
+        )}
+
+        {todayTips.length > 0 && (
+          <Box flexDirection="column">
+            <Text> </Text>
+            <Text bold>Tipp</Text>
+            <Text dimColor>{todayTips[0]}</Text>
+          </Box>
+        )}
       </Box>
     )
   })

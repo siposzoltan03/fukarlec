@@ -233,3 +233,93 @@ export function report(opts: {
   }
   return lines.join('\n')
 }
+
+// --- Raster helpers ----------------------------------------------------------
+
+const DEFAULT_BG = 0x01000000
+
+function lerpColor(a: number, b: number, t: number): number {
+  const ar = (a >> 16) & 0xff, ag = (a >> 8) & 0xff, ab = a & 0xff
+  const br = (b >> 16) & 0xff, bg = (b >> 8) & 0xff, bb = b & 0xff
+  const r = Math.round(ar + (br - ar) * t)
+  const g = Math.round(ag + (bg - ag) * t)
+  const bl = Math.round(ab + (bb - ab) * t)
+  return (r << 16) | (g << 8) | bl
+}
+
+export function ratioColor(ratio: number): number {
+  if (ratio < 0.5) return 0x22c55e // green
+  if (ratio < 0.8) return lerpColor(0x22c55e, 0xeab308, (ratio - 0.5) / 0.3) // green→yellow
+  if (ratio < 1.0) return lerpColor(0xeab308, 0xef4444, (ratio - 0.8) / 0.2) // yellow→red
+  return 0xef4444 // red
+}
+
+/** Build base64 Raster cells for a horizontal gauge bar. */
+export function gaugeRasterCells(width: number, ratio: number): string {
+  const filled = Math.min(width, Math.round(ratio * width))
+  const fg = ratioColor(ratio)
+  const words = new Uint32Array(width * 3)
+  for (let i = 0; i < width; i++) {
+    const base = i * 3
+    words[base] = i < filled ? 0x2588 : 0x2591 // █ or ░
+    words[base + 1] = i < filled ? fg : 0x555555
+    words[base + 2] = DEFAULT_BG
+  }
+  return uint32ToBase64(words)
+}
+
+/** Build base64 Raster cells for a sparkline (columns × rows). */
+export function sparklineRasterCells(values: number[], cols: number, rows: number, budget: number): string {
+  const max = Math.max(budget, ...values)
+  const words = new Uint32Array(cols * rows * 3)
+  for (let col = 0; col < cols; col++) {
+    const v = col < values.length ? values[col]! : 0
+    const height = max > 0 ? Math.round((v / max) * rows) : 0
+    const over = budget > 0 && v > budget
+    const fg = over ? 0xef4444 : 0x3b82f6
+    for (let row = 0; row < rows; row++) {
+      const base = (row * cols + col) * 3
+      const fromBottom = rows - 1 - row
+      if (fromBottom < height) {
+        words[base] = 0x2588 // █
+        words[base + 1] = fg
+      } else {
+        words[base] = 0x20 // space
+        words[base + 1] = DEFAULT_BG
+      }
+      words[base + 2] = DEFAULT_BG
+    }
+  }
+  return uint32ToBase64(words)
+}
+
+/** Build base64 Raster cells for a model share bar (stacked horizontal). */
+export function modelBarRasterCells(shares: { ratio: number; color: number }[], width: number): string {
+  const words = new Uint32Array(width * 3)
+  let col = 0
+  for (const s of shares) {
+    const end = Math.min(width, col + Math.max(1, Math.round(s.ratio * width)))
+    for (; col < end && col < width; col++) {
+      const base = col * 3
+      words[base] = 0x2588
+      words[base + 1] = s.color
+      words[base + 2] = DEFAULT_BG
+    }
+  }
+  for (; col < width; col++) {
+    const base = col * 3
+    words[base] = 0x2591
+    words[base + 1] = 0x555555
+    words[base + 2] = DEFAULT_BG
+  }
+  return uint32ToBase64(words)
+}
+
+export const MODEL_COLORS = [0x3b82f6, 0xa855f7, 0x22c55e, 0xf97316, 0xeab308, 0x06b6d4]
+
+function uint32ToBase64(arr: Uint32Array): string {
+  const bytes = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength)
+  let binary = ''
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!)
+  return btoa(binary)
+}

@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Fukarléc: LiteLLM pay-as-you-go költségfigyelő — status line, budget-őr, /fukarlec riport, spórolási tippek.",
   "author": { "name": "Zoltán Sipos" },
+  "types": "./types/index.d.ts",
   "userConfig": {
     "sessionBudget": {
       "type": "number",

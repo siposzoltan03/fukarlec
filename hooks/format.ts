@@ -131,28 +131,21 @@ const shortModel = (name: string) => name.replace(/^.*\//, '')
 export function tips(today: Day | undefined, turnCacheWrite: number): string[] {
   const out: string[] = []
   if (turnCacheWrite > 150_000) {
-    out.push(
-      `♻️ Ez a kör ${Math.round(turnCacheWrite / 1000)}k token cache-t írt újra (modellváltás vagy 5+ perc szünet után ez jár). Hosszú szünet előtt /compact, és ne válts modellt session közben.`,
-    )
+    out.push(`♻️ ${Math.round(turnCacheWrite / 1000)}k cache újraírva. /compact + ne válts modellt.`)
   }
   if (!today) return out
   const m = today.metrics
   const input = m.promptTokens
   if (input > 2_000_000 && m.cacheRead / input < 0.6) {
-    out.push(
-      `🧊 Ma a bemenő tokenek csak ${Math.round((m.cacheRead / input) * 100)}%-a jött cache-ből. Sok rövid session vagy gyakori /clear + modellváltás rontja.`,
-    )
+    out.push(`🧊 Cache hit ma ${Math.round((m.cacheRead / input) * 100)}%. /clear és modellváltás rontja.`)
   }
   const models = Object.entries(today.models).filter(([, mm]) => mm.spend > 0.5)
   const opus = models.find(([n]) => /opus/i.test(n))
   const cheaper = models.find(([n]) => /sonnet/i.test(n)) ?? models.find(([n]) => /haiku/i.test(n))
   if (opus && m.spend > 0 && opus[1].spend / m.spend > 0.8) {
     const ratio = cheaper && perMTok(cheaper[1]) > 0 ? perMTok(opus[1]) / perMTok(cheaper[1]) : 0
-    out.push(
-      `🧠 A mai költés ${Math.round((opus[1].spend / m.spend) * 100)}%-a ${shortModel(opus[0])}.` +
-        (ratio > 1.2 ? ` Tokenre vetítve ${ratio.toFixed(1)}x drágább volt, mint a ${shortModel(cheaper![0])}.` : '') +
-        ` Rutinmunkára (refaktor, tesztek, keresés) próbáld a /model sonnet-et.`,
-    )
+    const ratioText = ratio > 1.2 ? ` (${ratio.toFixed(1)}x drágább)` : ''
+    out.push(`🧠 Ma ${Math.round((opus[1].spend / m.spend) * 100)}% Opus${ratioText}. Rutinra /model sonnet.`)
   }
   return out
 }

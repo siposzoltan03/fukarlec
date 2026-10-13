@@ -1,0 +1,14 @@
+{
+  "name": "fukarlec",
+  "description": "Fukarléc: LiteLLM költségfigyelő plugin Claude Code-hoz.",
+  "owner": {
+    "name": "Zoltán Sipos"
+  },
+  "plugins": [
+    {
+      "name": "fukarlec",
+      "source": "./",
+      "description": "LiteLLM pay-as-you-go költségfigyelő Claude Code-hoz."
+    }
+  ]
+}

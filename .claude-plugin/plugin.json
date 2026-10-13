@@ -1,0 +1,51 @@
+{
+  "name": "fukarlec",
+  "version": "0.1.0",
+  "description": "Fukarléc: LiteLLM pay-as-you-go költségfigyelő — status line, budget-őr, /fukarlec riport, spórolási tippek.",
+  "author": { "name": "Zoltán Sipos" },
+  "userConfig": {
+    "sessionBudget": {
+      "type": "number",
+      "title": "Session keret (USD)",
+      "description": "Egy Claude Code session költségkerete dollárban. 0 = nincs.",
+      "default": 20
+    },
+    "dailyBudget": {
+      "type": "number",
+      "title": "Napi keret (USD)",
+      "description": "Napi költségkeret dollárban (UTC nap, ahogy a LiteLLM számol). 0 = nincs.",
+      "default": 60
+    },
+    "monthlyBudget": {
+      "type": "number",
+      "title": "Havi keret (USD)",
+      "description": "Havi költségkeret dollárban. 0 = nincs.",
+      "default": 800
+    },
+    "overBudget": {
+      "type": "string",
+      "title": "Keret felett",
+      "description": "warn: csak szól; block: új promptot nem enged, amíg /fukarlec engedd fel nem oldja.",
+      "options": ["warn", "block"],
+      "default": "warn"
+    },
+    "expensiveTurn": {
+      "type": "number",
+      "title": "Drága kör küszöb (USD)",
+      "description": "Ennél drágább kör után toast jön. 0 = kikapcsolva.",
+      "default": 1
+    },
+    "fun": {
+      "type": "boolean",
+      "title": "Vicces mód",
+      "description": "Emoji-hangulat, Fukar bácsi beszólásai és lángos-átváltás.",
+      "default": true
+    },
+    "hufRate": {
+      "type": "number",
+      "title": "USD/HUF árfolyam",
+      "description": "A lángos-átváltáshoz.",
+      "default": 350
+    }
+  }
+}

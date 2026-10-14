@@ -84,40 +84,6 @@ export function inKind(usd: number, hufRate: number): string {
   return `≈ ${shown} ${thing.name} ${thing.emoji}`
 }
 
-function pick<T>(list: T[], seed: number): T {
-  return list[Math.abs(Math.floor(seed)) % list.length]!
-}
-
-export function warnQuip(scope: Scope, ratio: number, seed: number): string {
-  const pct = Math.round(ratio * 100)
-  const name = SCOPE_NAMES[scope]
-  return pick(
-    [
-      `🧐 Lassan a testtel! A ${name} keret ${pct}%-a elment.`,
-      `🤨 Fukar bácsi szemöldöke felszaladt: ${name} keret ${pct}%.`,
-      `🪙 Számolj csak utána: a ${name} keretből ${pct}% már a LiteLLM-é.`,
-    ],
-    seed,
-  )
-}
-
-export function overQuip(scope: Scope, spent: number, budget: number, hufRate: number, seed: number): string {
-  const name = SCOPE_NAMES[scope]
-  return pick(
-    [
-      `💀 Elfogyott a ${name} keret (${money(spent)}/${money(budget)}). Ennyiből: ${inKind(spent, hufRate)}`,
-      `🔥 A ${name} keret ég! ${money(spent)} – a nagymamád ezt nem hagyná szó nélkül.`,
-      `🚨 ${name} keret túllépve: ${money(spent)}/${money(budget)}. Fukar bácsi a szívéhez kap.`,
-    ],
-    seed,
-  )
-}
-
-export function turnQuip(cost: number, hufRate: number, fun: boolean): string {
-  if (!fun) return `Drága kör: +${money(cost)}`
-  return `💸 Ez a kör +${money(cost)} volt (${inKind(cost, hufRate)}). Megérte?`
-}
-
 // --- Spórolási tippek -------------------------------------------------------
 
 const perMTok = (m: Metrics) => {

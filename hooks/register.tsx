@@ -12,7 +12,6 @@ import {
   modelBarRasterCells,
   money,
   mood,
-  overQuip,
   ratios,
   report,
   SCOPE_NAMES,
@@ -20,14 +19,17 @@ import {
   statusLine,
   streak,
   tips,
-  turnQuip,
   utcDate,
-  warnQuip,
   worst,
 } from './format'
 import type { Budgets, Scope, Spend } from './format'
-import type { SnapshotState, TurnCost } from '../types'
-import { BACSI_COLUMNS, BACSI_ROWS, bacsiMood, bacsiRasterCells, bacsiSays } from './bacsi'
+import type { SnapshotState, TurnCost, XpView } from '../types'
+import { BACSI_COLUMNS, BACSI_ROWS, bacsiMood, bacsiRasterCells } from './bacsi'
+import { fill, packById, PACKS, pickLine } from './packs'
+import type { Pack } from './packs'
+import { skinById, SKINS } from './skins'
+import { asLedger, balance, buy, credit, creditFrom, earned, owns, progressBar, rankOf, wear } from './xp'
+import type { Ledger, ShopItem } from './xp'
 
 const POLL_MS = 5 * 60_000
 const MIN_REFRESH_MS = 10_000
@@ -57,6 +59,16 @@ type Io = {
 const snapshotAtom = atom({ plugin: 'fukarlec', key: 'snapshot' } as const, null as SnapshotState | null)
 const lastTurnAtom = atom({ plugin: 'fukarlec', key: 'lastTurn' } as const, null as TurnCost | null)
 const bandHiddenAtom = atom({ plugin: 'fukarlec', key: 'bandHidden' } as const, false)
+const xpAtom = atom({ plugin: 'fukarlec', key: 'xp' } as const, null as XpView | null)
+
+const XP_KEY = 'xp'
+
+const SHOP: readonly ShopItem[] = [
+  ...SKINS.map(s => ({ kind: 'skin' as const, id: s.id, name: s.name, description: s.description, price: s.price })),
+  ...PACKS.map(p => ({ kind: 'pack' as const, id: p.id, name: p.name, description: p.description, price: p.price })),
+]
+
+const xpView = (l: Ledger): XpView => ({ skin: l.skin, pack: l.pack, earned: earned(l), balance: balance(l) })
 
 export const register: Register = (on, options) => {
   const budgets: Budgets = {
@@ -78,6 +90,12 @@ export const register: Register = (on, options) => {
   let inflight: Promise<Snapshot | undefined> | undefined
   let lastTipAt = 0
   const shownTips = new Set<string>()
+  let ledger: Ledger | undefined
+  let creditedOn = ''
+
+  const pack = (): Pack => packById(ledger?.pack)
+  const say = (lines: readonly string[], vars: Readonly<Record<string, string | number>>, seed: number) =>
+    fill(pickLine(lines, seed), vars)
 
   const spendOf = (s: Snapshot): Spend => ({
     session: Math.max(0, s.keySpend - (baseline ?? s.keySpend)),
@@ -145,10 +163,20 @@ export const register: Register = (on, options) => {
       if (level <= told) continue
       await $io.set(key, { at: s.at, level })
       if (level === 1) {
-        $io.toast(isFun ? warnQuip(scope, ratio, s.at) : `fukarléc: ${SCOPE_NAMES[scope]} keret ${Math.round(ratio * 100)}%`, 8000)
+        const vars = { keret: SCOPE_NAMES[scope], pct: Math.round(ratio * 100) }
+        $io.toast(isFun ? say(pack().warn, vars, s.at) : `fukarléc: ${vars.keret} keret ${vars.pct}%`, 8000)
       } else {
         const text = isFun
-          ? overQuip(scope, spentBy[scope], budgets[scope], hufRate, s.at)
+          ? say(
+              pack().over,
+              {
+                keret: SCOPE_NAMES[scope],
+                spent: money(spentBy[scope]),
+                budget: money(budgets[scope]),
+                kind: inKind(spentBy[scope], hufRate),
+              },
+              s.at,
+            )
           : `fukarléc: ${SCOPE_NAMES[scope]} keret túllépve (${money(spentBy[scope])}/${money(budgets[scope])})`
         $io.toast(text, 12_000)
         $io.notify(text)
@@ -183,6 +211,77 @@ export const register: Register = (on, options) => {
     return '💡 /compact a session közepén: kisebb context = kevesebb token/kör.'
   }
 
+  function xpText(l: Ledger): string {
+    const total = earned(l)
+    const r = rankOf(total)
+    const recent = Object.entries(l.days).sort(([a], [b]) => b.localeCompare(a)).slice(0, 7)
+    return [
+      `${r.emoji} ${r.name} · ${total} garas szerezve · ${balance(l)} a zsebben`,
+      r.next ? `${progressBar(r.progress)} → ${r.next.name} (${r.next.at})` : `${progressBar(1)} a legmagasabb rang!`,
+      `Skin: ${skinById(l.skin).name} · Pack: ${packById(l.pack).name}`,
+      '',
+      recent.length > 0
+        ? `Utolsó napok: ${recent.map(([d, xp]) => `${d.slice(5)} ${xp > 0 ? `+${xp}` : '0 🔥'}`).join(' · ')}`
+        : 'Még nincs jóváírt nap: a lezárt (UTC) napokért jár garas.',
+      `Szabály: napi keret (${money(budgets.daily)}) alatti aktív nap = 10 + max 10 a spórolásért + sorozat-bónusz (max +10).`,
+    ].join('\n')
+  }
+
+  function shopText(l: Ledger): string {
+    const line = (i: ShopItem) => {
+      const worn = i.kind === 'skin' ? l.skin === i.id : l.pack === i.id
+      const mark = worn ? '👉' : owns(l, i) ? '✅' : '🔒'
+      const price = i.price === 0 ? 'ingyen' : `${i.price} garas`
+      return `  ${mark} ${i.id.padEnd(9)} ${i.name.padEnd(16)} ${price.padStart(10)}  ${i.description}`
+    }
+    return [
+      `🛒 Fukar bácsi boltja · zsebben: ${balance(l)} garas`,
+      '',
+      'Skinek:',
+      ...SHOP.filter(i => i.kind === 'skin').map(line),
+      '',
+      'Üzenet-packek:',
+      ...SHOP.filter(i => i.kind === 'pack').map(line),
+      '',
+      '👉 viseled · ✅ megvan · 🔒 megvehető',
+      'Vásárlás: /fukarlec vesz <id> · átöltözés (ingyen): /fukarlec skin <id>, /fukarlec pack <id>',
+    ].join('\n')
+  }
+
+  async function loadLedger($io: Io, s: Snapshot): Promise<Ledger> {
+    ledger = asLedger(await $io.get(XP_KEY), s.date, s.at)
+    return ledger
+  }
+
+  async function saveLedger($io: Io, l: Ledger) {
+    ledger = l
+    await $io.set(XP_KEY, l as unknown as Stamped)
+  }
+
+  /** Once a day: credit the closed days since the last credit, and say so. */
+  async function creditXp($io: Io, s: Snapshot): Promise<XpView> {
+    if (creditedOn === s.date && ledger) return xpView(ledger)
+    let l = await loadLedger($io, s)
+    const from = creditFrom(l)
+    const to = addDays(s.date, -1)
+    if (budgets.daily > 0 && from <= to) {
+      try {
+        const activity = await fetchActivity($io.fetch, conn!, from, to)
+        const result = credit(l, activity.days, s.date, budgets.daily)
+        l = result.ledger
+        if (result.gained > 0) {
+          $io.toast(isFun ? say(pack().xp, { xp: result.gained }, s.at) : `fukarléc: +${result.gained} XP`, 10_000)
+        }
+      } catch (err) {
+        $io.debug(`fukarlec xp: ${err instanceof Error ? err.message : String(err)}`)
+        return xpView(l)
+      }
+    }
+    await saveLedger($io, l)
+    creditedOn = s.date
+    return xpView(l)
+  }
+
   function overScopes(): Scope[] {
     if (!snap) return []
     return (Object.entries(ratios(spendOf(snap), budgets)) as [Scope, number][]).filter(([, r]) => r >= 1).map(([s]) => s)
@@ -215,7 +314,7 @@ export const register: Register = (on, options) => {
     }
     await $.command.register({
       name: 'fukarlec',
-      description: 'LiteLLM költségriport: /fukarlec [hó | <napok száma> | frissít | engedd | panel]',
+      description: 'LiteLLM költségriport: /fukarlec [hó | <N> | frissít | engedd | panel | xp | bolt | vesz <tétel>]',
     })
     conn = makeConn({
       baseUrl: await $.env.get('ANTHROPIC_BASE_URL'),
@@ -229,7 +328,7 @@ export const register: Register = (on, options) => {
       const kept = await $io.get(`baseline:${sessionId}`)
       baseline = typeof kept?.spend === 'number' ? kept.spend : undefined
       showStatus($io)
-      void refresh($io).then(s => {
+      void refresh($io).then(async s => {
         if (s) {
           void update($, snapshotAtom, () => ({
             spend: spendOf(s),
@@ -237,11 +336,13 @@ export const register: Register = (on, options) => {
             date: s.date,
             stale: false,
           }))
+          const view = await creditXp($io, s)
+          await update($, xpAtom, () => view)
         }
       })
       void prune($io).catch(() => {})
       $io.every(POLL_MS, () => {
-        void refresh($io).then(s => {
+        void refresh($io).then(async s => {
           if (s) {
             void update($, snapshotAtom, () => ({
               spend: spendOf(s),
@@ -249,6 +350,8 @@ export const register: Register = (on, options) => {
               date: s.date,
               stale: lastError !== undefined,
             }))
+            const view = await creditXp($io, s)
+            await update($, xpAtom, () => view)
           }
         })
       })
@@ -273,7 +376,11 @@ export const register: Register = (on, options) => {
             stale: lastError !== undefined,
           }))
           if (before !== undefined && expensiveTurn > 0 && s.keySpend - before >= expensiveTurn) {
-            $io.toast(turnQuip(s.keySpend - before, hufRate, isFun), 8000)
+            const cost = s.keySpend - before
+            $io.toast(
+              isFun ? say(pack().turn, { cost: money(cost), kind: inKind(cost, hufRate) }, s.at) : `Drága kör: +${money(cost)}`,
+              8000,
+            )
             await update($, lastTurnAtom, () => ({
               cost: s.keySpend - before,
               inputTokens: 0,
@@ -323,6 +430,10 @@ export const register: Register = (on, options) => {
           '/fukarlec frissít    – adatok újratöltése',
           '/fukarlec engedd     – keret feletti blokk feloldása mára',
           '/fukarlec panel      – költség-dashboard megnyitása',
+          '/fukarlec xp         – rangod és garasaid',
+          '/fukarlec bolt       – skinek és üzenet-packek',
+          '/fukarlec vesz <id>  – vásárlás garasért (utána fel is veszi)',
+          '/fukarlec skin <id>  – megvett skin felvétele · /fukarlec pack <id> – megvett pack felvétele (nem vásárol)',
           '',
           `Keretek: session ${money(budgets.session)}, napi ${money(budgets.daily)}, havi ${money(budgets.monthly)} · mód: ${isBlocking ? 'block' : 'warn'} (/config → fukarlec)`,
         ].join('\n'),
@@ -342,6 +453,38 @@ export const register: Register = (on, options) => {
 
     const s = await refresh($io, true)
     if (!s) return { text: `Fukarléc: a LiteLLM nem válaszol (${lastError ?? 'ismeretlen hiba'}).` }
+
+    const [verb = '', ...rest] = arg.split(/\s+/)
+    if (['xp', 'bolt', 'vesz', 'skin', 'pack'].includes(verb)) {
+      const view = await creditXp($io, s)
+      await update($, xpAtom, () => view)
+      const l = ledger!
+      if (budgets.daily <= 0) return { text: 'Fukarléc: XP csak napi kerettel jár (/config → fukarlec → napi keret).' }
+
+      if (verb === 'xp') return { text: xpText(l) }
+      if (verb === 'bolt') return { text: shopText(l) }
+
+      const id = rest.join(' ')
+      const matches = SHOP.filter(i => i.id === id && (verb === 'vesz' || i.kind === verb))
+      if (matches.length === 0) return { text: `Nincs ilyen tétel: "${id}". Nézd meg: /fukarlec bolt` }
+      if (matches.length > 1) {
+        const ownsAll = matches.every(i => owns(l, i))
+        return {
+          text: `"${id}" skin és pack is${ownsAll ? ', mindkettő ingyenes és már a tiéd' : ''}. Felvenni: /fukarlec skin ${id} vagy /fukarlec pack ${id}`,
+        }
+      }
+      const item = matches[0]!
+      const result = verb === 'vesz' ? buy(l, item) : wear(l, item)
+      if ('error' in result) return { text: `🪙 ${result.error}` }
+      await saveLedger($io, result.ledger)
+      await update($, xpAtom, () => xpView(result.ledger))
+      return {
+        text:
+          verb === 'vesz'
+            ? `🛒 Megvetted és felvetted: ${item.name} (${item.price} garas). Maradt ${balance(result.ledger)}. Fukar bácsi könnyezik.`
+            : `${item.kind === 'skin' ? '👕' : '💬'} Felvéve: ${item.name}.`,
+      }
+    }
 
     await update($, snapshotAtom, () => ({
       spend: spendOf(s),
@@ -379,6 +522,7 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
     if (e.surface !== 'terminal') return next(e) // Raster is a terminal element
     const state = await read($, snapshotAtom)
+    const xp = await read($, xpAtom)
     const { Box, Text, Raster } = $.ui.resolve(e)
     const paneCols = e.props.bodyColumns ?? 40
 
@@ -510,14 +654,23 @@ export const register: Register = (on, options) => {
         {isFun && paneCols >= BACSI_COLUMNS + 2 && <Text> </Text>}
         {isFun && paneCols >= BACSI_COLUMNS + 2 && (
           <Box flexDirection="row" alignItems="center" gap={1}>
-            <Raster key="bacsi" columns={BACSI_COLUMNS} rows={BACSI_ROWS} cells={bacsiRasterCells(bacsiMood(w?.ratio))} />
+            <Raster key="bacsi" columns={BACSI_COLUMNS} rows={BACSI_ROWS} cells={bacsiRasterCells(skinById(xp?.skin), bacsiMood(w?.ratio))} />
             {paneCols >= BACSI_COLUMNS + 24 && (
               <Box borderStyle="round" borderDimColor paddingX={1} flexShrink={1}>
-                <Text italic>„{bacsiSays(bacsiMood(w?.ratio), Number(date.slice(8)))}”</Text>
+                <Text italic>„{pickLine(packById(xp?.pack).sayings[bacsiMood(w?.ratio)], Number(date.slice(8)))}”</Text>
               </Box>
             )}
           </Box>
         )}
+        {isFun && xp && budgets.daily > 0 && (() => {
+          const r = rankOf(xp.earned)
+          return (
+            <Text dimColor>
+              {r.emoji} {r.name} · {xp.balance} garas · {progressBar(r.progress, 10)}
+              {r.next ? ` → ${r.next.name}` : ''}
+            </Text>
+          )
+        })()}
       </Box>
     )
   })

@@ -15,12 +15,20 @@ export type TurnCost = {
   at: number
 }
 
+export type XpView = {
+  skin: string
+  pack: string
+  earned: number
+  balance: number
+}
+
 declare module 'claude-code' {
   interface PluginState {
     fukarlec: {
       snapshot: SnapshotState | null
       lastTurn: TurnCost | null
       bandHidden: boolean
+      xp: XpView | null
     }
   }
 }

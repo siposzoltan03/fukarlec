@@ -3,7 +3,11 @@ import type { On } from 'claude-code'
 
 import { inKind, mood, statusLine, streak, tips } from '../hooks/format'
 import { makeConn, parseCustomHeaders } from '../hooks/litellm'
-import { BACSI_COLUMNS, BACSI_ROWS, bacsiMood, bacsiPixels, bacsiRasterCells, bacsiSays } from '../hooks/bacsi'
+import { BACSI_COLUMNS, BACSI_PIXEL_ROWS, BACSI_ROWS, bacsiMood, bacsiPixels, bacsiRasterCells } from '../hooks/bacsi'
+import { fill, PACKS, packById } from '../hooks/packs'
+import { SKINS, skinById } from '../hooks/skins'
+import { balance, buy, credit, creditFrom, dayXp, newLedger, rankOf, wear } from '../hooks/xp'
+import type { ShopItem } from '../hooks/xp'
 import type { Day } from '../hooks/litellm'
 
 const NOW = Date.parse('2026-10-13T12:00:00Z')
@@ -164,16 +168,22 @@ describe('in a session', () => {
 })
 
 describe('Fukar bácsi', () => {
-  test('every mood is a full 24×44 sprite of known colors', async () => {
-    for (const m of ['nyugodt', 'aggodo', 'merges'] as const) {
-      const rows = bacsiPixels(m)
-      expect(rows.length).toBe(BACSI_ROWS * 2)
-      for (const row of rows) expect(row.length).toBe(BACSI_COLUMNS)
-      const cells = atob(bacsiRasterCells(m))
-      expect(cells.length).toBe(BACSI_COLUMNS * BACSI_ROWS * 3 * 4)
+  test('every skin in every mood is a full sprite of its own colors', async () => {
+    for (const skin of SKINS) {
+      expect(skin.rows.length).toBe(BACSI_PIXEL_ROWS)
+      for (const m of ['nyugodt', 'aggodo', 'merges'] as const) {
+        const rows = bacsiPixels(skin, m)
+        for (const row of rows) {
+          expect(row.length).toBe(BACSI_COLUMNS)
+          for (const ch of row) if (ch !== '.') expect(skin.palette[ch]).toBeDefined()
+        }
+        expect(atob(bacsiRasterCells(skin, m)).length).toBe(BACSI_COLUMNS * BACSI_ROWS * 3 * 4)
+      }
+      expect(bacsiPixels(skin, 'aggodo')).not.toEqual(bacsiPixels(skin, 'nyugodt'))
+      expect(bacsiPixels(skin, 'merges')).not.toEqual(bacsiPixels(skin, 'nyugodt'))
     }
-    expect(bacsiPixels('aggodo')).not.toEqual(bacsiPixels('nyugodt'))
-    expect(bacsiPixels('merges').join('')).not.toContain('P') // dropped his pipe
+    expect(new Set(SKINS.map(s => s.id)).size).toBe(SKINS.length)
+    expect(skinById('nincs ilyen').id).toBe('paraszt')
   })
 
   test('mood follows the worst budget', async () => {
@@ -181,6 +191,70 @@ describe('Fukar bácsi', () => {
     expect(bacsiMood(0.5)).toBe('nyugodt')
     expect(bacsiMood(0.9)).toBe('aggodo')
     expect(bacsiMood(1.2)).toBe('merges')
-    expect(bacsiSays('merges', 1)).toContain('Teringettét')
+  })
+
+  test('packs fill their placeholders and have a saying for every mood', async () => {
+    for (const p of PACKS) {
+      for (const list of [p.warn, p.over, p.turn, p.xp, p.sayings.nyugodt, p.sayings.aggodo, p.sayings.merges]) {
+        expect(list.length).toBeGreaterThan(0)
+      }
+      const vars = { keret: 'napi', pct: 85, spent: '$30.00', budget: '$25.00', cost: '$1.20', kind: '≈ 1 lángos 🫓', xp: 18 }
+      for (const t of [...p.warn, ...p.over, ...p.turn, ...p.xp]) expect(fill(t, vars)).not.toContain('{')
+    }
+    expect(packById('nav').name).toBe('NAV-ellenőr')
+  })
+})
+
+describe('XP', () => {
+  const d = (date: string, spend: number) => ({ date, metrics: { spend } }) as unknown as Day
+
+  test('a thrifty day earns base + thrift + streak; a day over budget earns nothing and breaks the streak', async () => {
+    expect(dayXp(0, 25, 0)).toBe(0) // idle
+    expect(dayXp(30, 25, 3)).toBe(0) // over
+    expect(dayXp(12.5, 25, 0)).toBe(15) // 10 + 5
+    expect(dayXp(5, 25, 9)).toBe(10 + 8 + 10) // streak capped at +10
+
+    const start = newLedger('2026-10-14', 0) // since 2026-10-07
+    const days = [d('2026-10-05', 1), d('2026-10-07', 20), d('2026-10-08', 10), d('2026-10-09', 40), d('2026-10-12', 5), d('2026-10-14', 1)]
+    const { ledger, gained, credited } = credit(start, days, '2026-10-14', 25)
+    expect(credited).toEqual(['2026-10-07', '2026-10-08', '2026-10-09', '2026-10-12']) // not before `since`, not today
+    expect(ledger.days).toEqual({ '2026-10-07': 12, '2026-10-08': 18, '2026-10-09': 0, '2026-10-12': 18 })
+    expect(gained).toBe(48)
+    expect(creditFrom(ledger)).toBe('2026-10-13')
+
+    // frozen: crediting again with a bigger budget changes nothing
+    expect(credit(ledger, days, '2026-10-14', 1000).gained).toBe(0)
+  })
+
+  test('shop: spend garas, wear what you own, refuse what you cannot afford', async () => {
+    const l = { ...newLedger('2026-10-14', 0), days: { '2026-10-10': 100, '2026-10-11': 60 } }
+    const csikos: ShopItem = { kind: 'skin', id: 'csikos', name: 'Csikós', description: '', price: 150 }
+    const matyo: ShopItem = { kind: 'skin', id: 'matyo', name: 'Matyó', description: '', price: 300 }
+
+    const bought = buy(l, csikos)
+    if (!('ledger' in bought)) throw new Error(bought.error)
+    expect(balance(bought.ledger)).toBe(10)
+    expect(bought.ledger.skin).toBe('csikos')
+
+    const poor = buy(bought.ledger, matyo)
+    expect('error' in poor && poor.error).toContain('Még 290 kell')
+
+    const again = buy(bought.ledger, csikos)
+    expect('error' in again && again.error).toContain('már a tiéd') // no second charge
+
+    const unowned = wear(bought.ledger, matyo)
+    expect('error' in unowned && unowned.error).toContain('/fukarlec vesz matyo') // wearing never buys
+
+    const paraszt: ShopItem = { kind: 'skin', id: 'paraszt', name: 'Paraszt bácsi', description: '', price: 0 }
+    const back = wear(bought.ledger, paraszt)
+    expect('ledger' in back && back.ledger.skin).toBe('paraszt')
+    expect('ledger' in back && balance(back.ledger)).toBe(10)
+  })
+
+  test('ranks', async () => {
+    expect(rankOf(0).name).toBe('Napszámos')
+    expect(rankOf(160).name).toBe('Béres')
+    expect(rankOf(250).progress).toBe(0.5)
+    expect(rankOf(5000).next).toBeUndefined()
   })
 })

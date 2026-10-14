@@ -42,6 +42,28 @@ Hangulat-emoji (😇 → 🙂 → 😬 → 🥵 → 🔥 → 💀), Fukar bácsi
 
 A napok UTC szerint értendők, ahogy a LiteLLM számol.
 
+## Garas, rangok, bolt
+
+Minden lezárt (UTC) nap, amikor dolgoztál, de a napi keret alatt maradtál, **garast** (XP) hoz:
+10 alap + max. 10 a megspórolt hányadért + sorozat-bónusz (napi +2, max. +10). Az üres napok nem adnak garast,
+de a sorozatot sem törik meg; a keret feletti nap 0 és megszakítja. A jóváírt nap rögzül, a keret utólagos
+emelése nem fizet újra.
+
+Rangok: 🧺 Napszámos → 🌱 Zsellér (50) → 🐂 Béres (150) → 🌾 Gazda (350) → 🏡 Nagygazda (700) → 🏰 Fukar földesúr (1200).
+
+A garast Fukar bácsi boltjában költöd el:
+
+| Skin | Ár | | Üzenet-pack | Ár |
+|---|---|---|---|---|
+| Paraszt bácsi | ingyen | | Fukar bácsi | ingyen |
+| Csikós | 150 | | Nagymama | 60 |
+| Kofa néni | 150 | | Kocsmai | 60 |
+| Juhász | 200 | | Betyár | 90 |
+| Matyó legény | 300 | | NAV-ellenőr | 120 |
+
+`/fukarlec xp` · `/fukarlec bolt` · `/fukarlec vesz <id>` (vásárlás, utána fel is veszi) ·
+`/fukarlec skin <id>` / `/fukarlec pack <id>` (megvett tétel felvétele, sosem vásárol)
+
 ## Telepítés
 
 ```

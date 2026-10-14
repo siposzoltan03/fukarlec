@@ -316,7 +316,7 @@ export function colorDotRasterCells(color: number): string {
   return uint32ToBase64(words)
 }
 
-function uint32ToBase64(arr: Uint32Array): string {
+export function uint32ToBase64(arr: Uint32Array): string {
   const bytes = new Uint8Array(arr.buffer, arr.byteOffset, arr.byteLength)
   let binary = ''
   for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]!)

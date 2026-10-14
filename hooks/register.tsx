@@ -27,6 +27,7 @@ import {
 } from './format'
 import type { Budgets, Scope, Spend } from './format'
 import type { SnapshotState, TurnCost } from '../types'
+import { BACSI_COLUMNS, BACSI_ROWS, bacsiMood, bacsiRasterCells, bacsiSays } from './bacsi'
 
 const POLL_MS = 5 * 60_000
 const MIN_REFRESH_MS = 10_000
@@ -375,7 +376,8 @@ export const register: Register = (on, options) => {
 
   // --- Pane dashboard ----------------------------------------------------------
 
-  on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e) => {
+  on('ui.render', { component: 'Pane', requestId: PANE_ID }, async ($, e, next) => {
+    if (e.surface !== 'terminal') return next(e) // Raster is a terminal element
     const state = await read($, snapshotAtom)
     const { Box, Text, Raster } = $.ui.resolve(e)
     const paneCols = e.props.bodyColumns ?? 40
@@ -436,6 +438,7 @@ export const register: Register = (on, options) => {
       <Box flexDirection="column">
         <Text bold>🪙 Fukarléc {moodEmoji} {date}</Text>
         <Text> </Text>
+
 
         {scopes.filter(s => s.budget > 0).map(s => {
           const r = s.budget > 0 ? s.spent / s.budget : 0
@@ -502,6 +505,17 @@ export const register: Register = (on, options) => {
             <Text> </Text>
             <Text bold>Tipp</Text>
             <Text dimColor>{paneTip}</Text>
+          </Box>
+        )}
+        {isFun && paneCols >= BACSI_COLUMNS + 2 && <Text> </Text>}
+        {isFun && paneCols >= BACSI_COLUMNS + 2 && (
+          <Box flexDirection="row" alignItems="center" gap={1}>
+            <Raster key="bacsi" columns={BACSI_COLUMNS} rows={BACSI_ROWS} cells={bacsiRasterCells(bacsiMood(w?.ratio))} />
+            {paneCols >= BACSI_COLUMNS + 24 && (
+              <Box borderStyle="round" borderDimColor paddingX={1} flexShrink={1}>
+                <Text italic>„{bacsiSays(bacsiMood(w?.ratio), Number(date.slice(8)))}”</Text>
+              </Box>
+            )}
           </Box>
         )}
       </Box>

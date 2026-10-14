@@ -3,6 +3,7 @@ import type { On } from 'claude-code'
 
 import { inKind, mood, statusLine, streak, tips } from '../hooks/format'
 import { makeConn, parseCustomHeaders } from '../hooks/litellm'
+import { BACSI_COLUMNS, BACSI_ROWS, bacsiMood, bacsiPixels, bacsiRasterCells, bacsiSays } from '../hooks/bacsi'
 import type { Day } from '../hooks/litellm'
 
 const NOW = Date.parse('2026-10-13T12:00:00Z')
@@ -159,5 +160,27 @@ describe('in a session', () => {
     mock.env(on, {})
     await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
     expect((await $.command.run(COMMAND(''))).text).toContain('nem LiteLLM')
+  })
+})
+
+describe('Fukar bácsi', () => {
+  test('every mood is a full 24×44 sprite of known colors', async () => {
+    for (const m of ['nyugodt', 'aggodo', 'merges'] as const) {
+      const rows = bacsiPixels(m)
+      expect(rows.length).toBe(BACSI_ROWS * 2)
+      for (const row of rows) expect(row.length).toBe(BACSI_COLUMNS)
+      const cells = atob(bacsiRasterCells(m))
+      expect(cells.length).toBe(BACSI_COLUMNS * BACSI_ROWS * 3 * 4)
+    }
+    expect(bacsiPixels('aggodo')).not.toEqual(bacsiPixels('nyugodt'))
+    expect(bacsiPixels('merges').join('')).not.toContain('P') // dropped his pipe
+  })
+
+  test('mood follows the worst budget', async () => {
+    expect(bacsiMood(undefined)).toBe('nyugodt')
+    expect(bacsiMood(0.5)).toBe('nyugodt')
+    expect(bacsiMood(0.9)).toBe('aggodo')
+    expect(bacsiMood(1.2)).toBe('merges')
+    expect(bacsiSays('merges', 1)).toContain('Teringettét')
   })
 })

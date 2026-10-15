@@ -5,6 +5,12 @@ import { addMetrics, emptyMetrics, fetchActivity, fetchKeySpend, fetchPrices, ma
 import type { Activity, Conn, Day, Fetch, Metrics, Prices } from './litellm'
 import {
   cacheExpiryWarning,
+  cacheSoonWarning,
+  cacheStatus,
+  cacheTtlMs,
+  clearOrRewriteTip,
+  clock,
+  restartCosts,
   compactEffectTip,
   contextGrowthTip,
   failedTip,
@@ -72,6 +78,8 @@ type Io = {
   /** Tokens in the live context window, as the status line counts them. */
   contextTokens: () => Promise<number>
   model: () => Promise<string>
+  /** Draws the pane again (its cache countdown reads the clock). */
+  redraw: () => void
 }
 
 const snapshotAtom = atom({ plugin: 'fukarlec', key: 'snapshot' } as const, null as SnapshotState | null)
@@ -117,6 +125,15 @@ export const register: Register = (on, options) => {
   let history: Day[] = []
   let historyOn = ''
   let lastTurnEndAt = 0
+  // The prompt cache countdown: warm for `cacheTtl` after the last main-thread turn ended.
+  let cacheTtl = cacheTtlMs(undefined)
+  let isTurnRunning = false
+  let nowMs = 0
+  let soonWarnedFor = 0
+  let expiredToldFor = 0
+  // What a fresh session starts with (context after this session's first turn), and the model last used.
+  let baseContextTokens = 0
+  let lastModel = ''
   let lastContextTokens = 0
   let mainTokens = 0
   let subTokens = 0
@@ -138,7 +155,37 @@ export const register: Register = (on, options) => {
   function showStatus($io: Io) {
     if (!conn) return $io.status(undefined)
     if (!snap) return $io.status(lastError ? `🪙 ⚠︎ ${lastError}` : '🪙 …')
-    $io.status(statusLine(spendOf(snap), budgets, isFun, lastError !== undefined))
+    $io.status(statusLine(spendOf(snap), budgets, isFun, lastError !== undefined) + cacheSuffix())
+  }
+
+  /** ` · ⏳ cache 3:42` after a turn; nothing before the first turn or while one runs. */
+  function cacheSuffix(): string {
+    if (lastTurnEndAt === 0 || isTurnRunning || nowMs === 0) return ''
+    return ` · ${cacheStatus(lastTurnEndAt + cacheTtl - nowMs)}`
+  }
+
+  /** Once a second: move the countdown, and warn ~30 s before a big context's cache expires. */
+  async function tick($io: Io) {
+    nowMs = await $io.now()
+    if (lastTurnEndAt === 0 || isTurnRunning) return
+    const remaining = lastTurnEndAt + cacheTtl - nowMs
+    if (remaining < -2_000) return // already shows expired
+    showStatus($io)
+    if (remaining <= 0 && expiredToldFor !== lastTurnEndAt) {
+      expiredToldFor = lastTurnEndAt
+      const tip = clearOrRewriteTip(lastContextTokens, baseContextTokens, priceOf(lastModel))
+      if (tip) $io.toast(isFun ? voice(tip, pack(), nowMs) : tip, 20_000)
+      $io.redraw()
+    }
+    if (Math.ceil(remaining / 1000) % 5 === 0) $io.redraw()
+    if (soonWarnedFor !== lastTurnEndAt) {
+      const warning = cacheSoonWarning(remaining, lastContextTokens, priceOf(await $io.model().catch(() => '')))
+      if (warning) {
+        soonWarnedFor = lastTurnEndAt
+        $io.toast(isFun ? voice(warning, pack(), nowMs) : warning, 20_000)
+        if (lastContextTokens * (priceOf(await $io.model().catch(() => ''))?.cacheWrite ?? 0) >= 0.5) $io.notify(warning)
+      }
+    }
   }
 
   async function load($io: Io): Promise<Snapshot> {
@@ -370,6 +417,9 @@ export const register: Register = (on, options) => {
       outputTip(lastActive, priceOf),
       failedTip(lastActive),
       weekdayTip(history),
+      lastTurnEndAt > 0 && !isTurnRunning && nowMs > lastTurnEndAt + cacheTtl
+        ? clearOrRewriteTip(lastContextTokens, baseContextTokens, priceOf(lastModel))
+        : undefined,
     ].filter((t): t is string => t !== undefined)
     const seed = Number(s.date.slice(8))
     return {
@@ -409,6 +459,7 @@ export const register: Register = (on, options) => {
       after: (ms, fn) => void $.clock.after(ms, fn),
       contextTokens: async () => (await $.session.usage()).context.tokens ?? 0,
       model: () => $.session.model(),
+      redraw: () => $.ui.invalidate('ui.render'),
     }
     await $.command.register({
       name: 'fukarlec',
@@ -423,6 +474,14 @@ export const register: Register = (on, options) => {
     if (conn) {
       const $io = io
       sessionId = await $.session.id()
+      const turnEnd = await $io.get(`turnEnd:${sessionId}`)
+      if (typeof turnEnd?.at === 'number') lastTurnEndAt = turnEnd.at
+      if (typeof turnEnd?.base === 'number') baseContextTokens = turnEnd.base
+      // The live context and model, so the keep / compact / clear prices show before the next turn.
+      lastContextTokens = await $io.contextTokens().catch(() => 0)
+      lastModel = await $io.model().catch(() => '')
+      // A session with no turn yet holds just what a fresh one starts with.
+      if (baseContextTokens === 0 && lastTurnEndAt === 0 && lastContextTokens > 0) baseContextTokens = lastContextTokens
       const kept = await $io.get(`baseline:${sessionId}`)
       baseline = typeof kept?.spend === 'number' ? kept.spend : undefined
       showStatus($io)
@@ -441,6 +500,10 @@ export const register: Register = (on, options) => {
         }
       })
       void prune($io).catch(() => {})
+      const ttlEnv = await $.env.get('CLAUDE_CODE_PROMPT_CACHE_TTL')
+      const settings = (await $.settings.read()) as Record<string, unknown>
+      cacheTtl = cacheTtlMs(ttlEnv ?? settings.promptCacheTtl)
+      $io.every(1_000, () => void tick($io))
       $io.every(POLL_MS, () => {
         void refresh($io).then(async s => {
           if (s) {
@@ -463,7 +526,22 @@ export const register: Register = (on, options) => {
 
   // --- turn.complete -----------------------------------------------------------
 
+  on('turn.start', async ($, e, next) => {
+    if (io) {
+      isTurnRunning = true
+      showStatus(io)
+      io.redraw()
+    }
+    return next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
+    if (e.agentId === undefined) {
+      isTurnRunning = false
+      if (e.usage?.model) lastModel = e.usage.model
+      lastTurnEndAt = nowMs = await $.clock.now()
+      if (io && sessionId) void io.set(`turnEnd:${sessionId}`, { at: lastTurnEndAt, base: baseContextTokens }).catch(() => {})
+    }
     const u = e.usage
     if (u) {
       const tokens = u.input_tokens + u.output_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
@@ -485,8 +563,8 @@ export const register: Register = (on, options) => {
       }
       $io.after(0, () => {
         void (async () => {
-          lastTurnEndAt = await $io.now()
           lastContextTokens = await $io.contextTokens().catch(() => lastContextTokens)
+          if (baseContextTokens === 0 && lastContextTokens > 0) baseContextTokens = lastContextTokens
           const model = await $io.model().catch(() => '')
           const step = Math.floor(lastContextTokens / 100_000)
           await offerTip($io, `ctx:${step}`, contextGrowthTip(lastContextTokens, priceOf(model)))
@@ -568,7 +646,7 @@ export const register: Register = (on, options) => {
     // An expired cache, said before the turn pays for it.
     if (conn && io && lastTurnEndAt > 0 && e.origin.kind === 'composer') {
       const idle = (await $.clock.now()) - lastTurnEndAt
-      const warning = cacheExpiryWarning(idle, lastContextTokens, priceOf(await $.session.model()))
+      const warning = cacheExpiryWarning(idle, lastContextTokens, priceOf(await $.session.model()), cacheTtl)
       await offerTip(io, `cache:${lastTurnEndAt}`, warning, true)
     }
     if (!isBlocking || !conn || !snap || (e.origin.kind !== 'composer' && e.origin.kind !== 'bridge')) return next(e)
@@ -703,6 +781,12 @@ export const register: Register = (on, options) => {
     if (e.surface !== 'terminal') return next(e) // Raster is a terminal element
     const state = await read($, snapshotAtom)
     const xp = await read($, xpAtom)
+    const cacheLeft = lastTurnEndAt > 0 && !isTurnRunning ? lastTurnEndAt + cacheTtl - (await $.clock.now()) : undefined
+    const lastPrice = priceOf(lastModel)
+    const restart =
+      cacheLeft !== undefined && cacheLeft <= 0 && lastPrice && lastContextTokens >= 50_000
+        ? restartCosts(lastContextTokens, baseContextTokens, lastPrice, false)
+        : undefined
     const advice = await read($, adviceAtom)
     const { Box, Text, Raster } = $.ui.resolve(e)
     const paneCols = e.props.bodyColumns ?? 40
@@ -815,6 +899,21 @@ export const register: Register = (on, options) => {
 
         <Text> </Text>
         <Text dimColor>Cache: {cacheHit}% hit, {money(activity.total.cacheSaved)} megtakarítás</Text>
+        {lastTurnEndAt === 0 && !isTurnRunning && <Text dimColor>⏳ Cache: az első kör végén indul</Text>}
+        {isTurnRunning && <Text dimColor>⏳ Cache: friss (fut a kör)</Text>}
+        {cacheLeft !== undefined && (
+          <Text color={cacheLeft <= 0 ? '#60a5fa' : cacheLeft <= 60_000 ? '#ef4444' : undefined} dimColor={cacheLeft > 60_000}>
+            {cacheLeft > 0
+              ? `⏳ Cache: ${clock(cacheLeft)} ${progressBar(cacheLeft / cacheTtl, 10)}`
+              : '❄️ Cache: lejárt — a következő kör újraírja a contextet'}
+          </Text>
+        )}
+        {restart && (
+          <Text dimColor>
+            {'   '}következő 10 kör: folytatás ~{money(restart.keep)} · /compact ~{money(restart.compact)} · /clear ~
+            {money(restart.clear)} → {restart.best === 'compact' ? '/compact' : 'folytasd'} (új feladatnál /clear)
+          </Text>
+        )}
         <Text dimColor>Összesen: {money(totalSpend)} · {activity.total.requests} kérés</Text>
 
         {isFun && (

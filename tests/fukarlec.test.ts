@@ -11,6 +11,12 @@ import type { ShopItem } from '../hooks/xp'
 import type { Day, Prices } from '../hooks/litellm'
 import {
   cacheExpiryWarning,
+  cacheSoonWarning,
+  cacheStatus,
+  cacheTtlMs,
+  clearOrRewriteTip,
+  clock,
+  restartCosts,
   compactEffectTip,
   contextGrowthTip,
   failedTip,
@@ -303,6 +309,37 @@ describe('advice', () => {
     expect(repeatReadTip('/a/b/register.tsx', 4)).toContain('register.tsx-t már 4×')
     expect(subagentTip(2_000_000, 500_000)).toBeUndefined()
     expect(subagentTip(1_000_000, 1_500_000)).toContain('60%')
+  })
+
+  test('cache countdown: TTL, clock, status, the warning 30 s before', async () => {
+    expect(cacheTtlMs(undefined)).toBe(5 * 60_000)
+    expect(cacheTtlMs('1h')).toBe(60 * 60_000)
+    expect(clock(222_000)).toBe('3:42')
+    expect(clock(6_100)).toBe('0:07')
+    expect(cacheStatus(222_000)).toBe('⏳ cache 3:42')
+    expect(cacheStatus(42_000)).toBe('⌛ cache 0:42!')
+    expect(cacheStatus(-1)).toBe('❄️ cache lejárt')
+    expect(cacheSoonWarning(45_000, 300_000, opus)).toBeUndefined() // not yet
+    expect(cacheSoonWarning(25_000, 20_000, opus)).toBeUndefined() // small context
+    expect(cacheSoonWarning(25_000, 300_000, opus)).toContain('25 mp múlva')
+    expect(cacheSoonWarning(25_000, 300_000, opus)).toContain('≈ $1.50')
+    expect(cacheExpiryWarning(10 * 60_000, 300_000, opus, 60 * 60_000)).toBeUndefined() // 1h cache still warm
+  })
+
+  test('keep, /compact or /clear: priced for the next 10 turns', async () => {
+    const cents = (x: number) => Math.round(x * 100)
+    // 300k context, cache expired: rewriting 300k ($1.50) is paid either way, so keep wins over 10 turns
+    const cold = restartCosts(300_000, 30_000, opus, false)
+    expect([cents(cold.keep), cents(cold.compact), cents(cold.clear)]).toEqual([204, 192, 20])
+    expect(cold.best).toBe('keep')
+    // 600k context: the cheaper turns after a compact pay for it
+    expect(restartCosts(600_000, 30_000, opus, false).best).toBe('compact')
+    // still warm: compacting reads the context at cache-read price, so it pays off much sooner
+    expect(restartCosts(300_000, 30_000, opus, true).best).toBe('compact')
+    expect(clearOrRewriteTip(30_000, 20_000, opus)).toBeUndefined()
+    expect(clearOrRewriteTip(300_000, 30_000, opus)).toContain('folytatás ~$2.04 · /compact ~$1.92 · /clear ~$0.20')
+    expect(clearOrRewriteTip(300_000, 30_000, opus)).toContain('folytasd nyugodtan')
+    expect(cacheSoonWarning(25_000, 300_000, opus)).toContain('/compact most (~$0.22, amíg meleg)')
   })
 
   test('forecast and its tip', async () => {

@@ -11,8 +11,81 @@ const k = (tokens: number) => `${Math.round(tokens / 1000)}k`
 /** The prompt cache lives five minutes; past that the next turn writes the whole context again. */
 export const CACHE_TTL_MS = 5 * 60_000
 
-export function cacheExpiryWarning(idleMs: number, contextTokens: number, price: Prices | undefined): string | undefined {
-  if (idleMs < CACHE_TTL_MS || contextTokens < 50_000) return undefined
+/** The session's cache lifetime: `promptCacheTtl` / CLAUDE_CODE_PROMPT_CACHE_TTL is "5m" or "1h". */
+export function cacheTtlMs(setting: unknown): number {
+  return setting === '1h' ? 60 * 60_000 : CACHE_TTL_MS
+}
+
+/** `3:42`, or `0:07`. */
+export function clock(ms: number): string {
+  const total = Math.max(0, Math.ceil(ms / 1000))
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
+}
+
+/** The status line's cache part: counting down after a turn, then expired. */
+export function cacheStatus(remainingMs: number): string {
+  if (remainingMs <= 0) return '❄️ cache lejárt'
+  return remainingMs <= 60_000 ? `⌛ cache ${clock(remainingMs)}!` : `⏳ cache ${clock(remainingMs)}`
+}
+
+/** Tokens a /compact summary comes to, roughly. */
+export const SUMMARY_TOKENS = 8_000
+
+/** How far ahead the keep / compact / clear comparison looks. */
+export const RESTART_TURNS = 10
+
+export type RestartCosts = { keep: number; compact: number; clear: number; best: 'keep' | 'compact' }
+
+/**
+ * What the next `turns` turns cost if you keep the context, /compact it first, or /clear.
+ * The first turn (or the compaction) reads the context at cache-read price while the cache
+ * is warm and rewrites it at cache-write price once it has expired; every later turn reads
+ * what is left. `baseTokens` is what a fresh session starts with (system prompt, tools).
+ */
+export function restartCosts(
+  contextTokens: number,
+  baseTokens: number,
+  price: Prices,
+  isWarm: boolean,
+  turns = RESTART_TURNS,
+): RestartCosts {
+  const base = Math.min(Math.max(baseTokens, 10_000), contextTokens)
+  const first = isWarm ? price.cacheRead : price.cacheWrite
+  const after = base + SUMMARY_TOKENS
+  const keep = contextTokens * first + (turns - 1) * contextTokens * price.cacheRead
+  const compact =
+    contextTokens * first + SUMMARY_TOKENS * price.output + after * price.cacheWrite + (turns - 1) * after * price.cacheRead
+  const clear = base * price.cacheWrite + (turns - 1) * base * price.cacheRead
+  return { keep, compact, clear, best: compact < keep * 0.9 ? 'compact' : 'keep' }
+}
+
+/** Once the cache has expired: keep going, /compact or /clear, priced for the next turns. */
+export function clearOrRewriteTip(contextTokens: number, baseTokens: number, price: Prices | undefined): string | undefined {
+  if (!price || contextTokens < 50_000) return undefined
+  const c = restartCosts(contextTokens, baseTokens, price, false)
+  const same = c.best === 'compact' ? '/compact' : 'folytasd nyugodtan'
+  return (
+    `🤔 Lejárt a cache (${k(contextTokens)} context). A következő ${RESTART_TURNS} kör ára: ` +
+    `folytatás ~${money(c.keep)} · /compact ~${money(c.compact)} · /clear ~${money(c.clear)}. ` +
+    `Ugyanazon a feladaton: ${same}; új feladatnál: /clear.`
+  )
+}
+
+/** Said ~30 s before the cache expires, while sending now (or compacting now) still reads it cheaply. */
+export function cacheSoonWarning(remainingMs: number, contextTokens: number, price: Prices | undefined): string | undefined {
+  if (remainingMs <= 0 || remainingMs > 30_000 || contextTokens < 50_000) return undefined
+  const cost = price ? ` ≈ ${money(contextTokens * price.cacheWrite)}` : ''
+  const compactNow = price ? ` (~${money(contextTokens * price.cacheRead + SUMMARY_TOKENS * price.output)}, amíg meleg)` : ''
+  return `⏳ ${Math.ceil(remainingMs / 1000)} mp múlva lejár a cache: ${k(contextTokens)} token újraírása${cost} lenne. Küldj most, vagy /compact most${compactNow}.`
+}
+
+export function cacheExpiryWarning(
+  idleMs: number,
+  contextTokens: number,
+  price: Prices | undefined,
+  ttlMs = CACHE_TTL_MS,
+): string | undefined {
+  if (idleMs < ttlMs || contextTokens < 50_000) return undefined
   const minutes = Math.round(idleMs / 60_000)
   const cost = price ? ` ≈ ${money(contextTokens * price.cacheWrite)}` : ''
   return `⏳ ${minutes} perc szünet: a cache lejárt, ez a kör ${k(contextTokens)} tokent ír újra${cost}. Előtte /compact?`

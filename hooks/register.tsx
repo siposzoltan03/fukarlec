@@ -146,6 +146,14 @@ export const register: Register = (on, options) => {
   const say = (lines: readonly string[], vars: Readonly<Record<string, string | number>>, seed: number) =>
     fill(pickLine(lines, seed), vars)
 
+  /** Work that outlives its dispatch (a reload, a test's end): failures go to the debug log, never unhandled. */
+  const background = (work: Promise<unknown>) =>
+    void work.catch(err => {
+      try {
+        io?.debug(`fukarlec: ${err instanceof Error ? err.message : String(err)}`)
+      } catch {}
+    })
+
   const spendOf = (s: Snapshot): Spend => ({
     session: Math.max(0, s.keySpend - (baseline ?? s.keySpend)),
     today: s.today?.metrics.spend ?? 0,
@@ -485,9 +493,9 @@ export const register: Register = (on, options) => {
       const kept = await $io.get(`baseline:${sessionId}`)
       baseline = typeof kept?.spend === 'number' ? kept.spend : undefined
       showStatus($io)
-      void refresh($io).then(async s => {
+      background(refresh($io).then(async s => {
         if (s) {
-          void update($, snapshotAtom, () => ({
+          await update($, snapshotAtom, () => ({
             spend: spendOf(s),
             activity: s.activity,
             date: s.date,
@@ -498,16 +506,16 @@ export const register: Register = (on, options) => {
           const advice = await adviceFor($io, s)
           await update($, adviceAtom, () => advice)
         }
-      })
+      }))
       void prune($io).catch(() => {})
       const ttlEnv = await $.env.get('CLAUDE_CODE_PROMPT_CACHE_TTL')
       const settings = (await $.settings.read()) as Record<string, unknown>
       cacheTtl = cacheTtlMs(ttlEnv ?? settings.promptCacheTtl)
-      $io.every(1_000, () => void tick($io))
+      $io.every(1_000, () => background(tick($io)))
       $io.every(POLL_MS, () => {
-        void refresh($io).then(async s => {
+        background(refresh($io).then(async s => {
           if (s) {
-            void update($, snapshotAtom, () => ({
+            await update($, snapshotAtom, () => ({
               spend: spendOf(s),
               activity: s.activity,
               date: s.date,
@@ -518,7 +526,7 @@ export const register: Register = (on, options) => {
             const advice = await adviceFor($io, s)
             await update($, adviceAtom, () => advice)
           }
-        })
+        }))
       })
     }
     return next(e)
@@ -562,7 +570,7 @@ export const register: Register = (on, options) => {
         if (compact) compact.after.push(weight)
       }
       $io.after(0, () => {
-        void (async () => {
+        background((async () => {
           lastContextTokens = await $io.contextTokens().catch(() => lastContextTokens)
           if (baseContextTokens === 0 && lastContextTokens > 0) baseContextTokens = lastContextTokens
           const model = await $io.model().catch(() => '')
@@ -576,9 +584,9 @@ export const register: Register = (on, options) => {
               compact = undefined
             }
           }
-        })()
+        })())
         const before = snap?.keySpend
-        void refresh($io, true).then(async s => {
+        background(refresh($io, true).then(async s => {
           if (!s) return
           await update($, snapshotAtom, () => ({
             spend: spendOf(s),
@@ -598,13 +606,13 @@ export const register: Register = (on, options) => {
               outputTokens: 0,
               at: s.at,
             }))
-            $io.after(TURN_DISPLAY_MS, () => void update($, lastTurnAtom, () => null))
+            $io.after(TURN_DISPLAY_MS, () => background(update($, lastTurnAtom, () => null)))
           }
           const advice = await adviceFor($io, s)
           await update($, adviceAtom, () => advice)
           const tip = tips(s.today, cacheWrite).find(t => !toldTips.has(`${s.date}:${t.slice(0, 2)}`))
           if (tip) await offerTip($io, `${s.date}:${tip.slice(0, 2)}`, tip)
-        })
+        }))
       })
     }
     return next(e)

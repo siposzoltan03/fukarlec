@@ -25,13 +25,27 @@ Havi riport napi oszlopokkal, modellenkénti bontással ($/MTok), cache-találat
 - Budget gauge-ok (session/napi/havi), színváltás ahogy közelít a limithez
 - Napi sparkline az utolsó napok költéséről
 - Modell-megoszlás színes sávval és legenddel
-- Cache statisztika
+- Cache statisztika és élő cache-visszaszámláló
 - Spórolási tippek a valós számokból
 - Vicces mód: lángos-átváltás, streak, hangulat-emoji
 
 ### Budget-őr
 80%-nál és 100%-nál toast (100%-nál natív értesítés is). `block` módban keret felett nem enged új promptot,
 amíg `/fukarlec engedd` fel nem oldja aznapra.
+
+### Cache-visszaszámláló
+A prompt cache az utolsó kör után 5 percig meleg (egy óráig, ha `promptCacheTtl: "1h"` vagy
+`CLAUDE_CODE_PROMPT_CACHE_TTL=1h` van beállítva). Utána a következő kör a teljes contextet újraírja, cache-írási áron.
+
+- **Status line:** `… · ⏳ cache 3:42`, az utolsó percben `⌛ cache 0:42!`, utána `❄️ cache lejárt`. Kör közben nem számol,
+  mert a cache akkor frissül.
+- **Panel:** a „Cache: X% hit” sor alatt `⏳ Cache: 3:42 ▰▰▰▰▰▰▰▱▱▱`, az utolsó percben pirosan.
+- **~30 mp-cel lejárat előtt** (50k token feletti contextnél): toast az újraírás árával, és azzal, mennyibe kerülne most
+  a `/compact`, amíg a cache meleg. Ha az újraírás legalább $0.50, natív értesítés is jön.
+- **Lejáratkor:** a következő 10 kör ára háromféleképp (folytatás, `/compact`, `/clear`) a proxy valós áraiból, ajánlással:
+  ugyanazon a feladaton folytasd vagy compactolj, új feladatnál `/clear`. Amíg a cache lejárt, ez a panelen és a
+  `/fukarlec tippek`-ben is látszik.
+- `/reload-plugins` után is tovább számol: az utolsó kör ideje sessionönként megmarad.
 
 ### Spórolási tippek
 Max. 30 percenként egy, a valós mai számokból: Opus-túlsúly, alacsony cache-találat, újraírt cache modellváltás vagy hosszú szünet után.

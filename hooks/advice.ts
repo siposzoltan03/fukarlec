@@ -188,6 +188,20 @@ export function weekdayTip(days: readonly Day[]): string | undefined {
   return `📅 A ${WEEKDAYS[wd]}i napjaid a legdrágábbak (átlag ${money(top.spend / top.n)}, a többi ${money(avg)}).`
 }
 
+export type TokenUsage = { input: number; output: number; cacheRead: number; cacheWrite: number }
+
+/** USD for one turn's tokens at the proxy's prices; a 1-hour cache write costs 2× input instead of 1.25×. */
+export function turnCost(u: TokenUsage, price: Prices, isHourCache = false): number {
+  const write = isHourCache ? price.cacheWrite * 1.6 : price.cacheWrite
+  return u.input * price.input + u.output * price.output + u.cacheRead * price.cacheRead + u.cacheWrite * write
+}
+
+/** The key spent clearly more than this session did: another session or tool shares the key. */
+export function parallelUseTip(sessionCost: number, keyDelta: number): string | undefined {
+  if (keyDelta < 1 || keyDelta < sessionCost * 1.3 + 0.5) return undefined
+  return `👥 A kulcs ebben a sessionben ${money(keyDelta)}-t költött, ez a session maga ${money(sessionCost)}-t: a különbség valószínűleg párhuzamos használat (másik session vagy opencode).`
+}
+
 /** Tokens a turn moved, weighted by what each kind costs relative to plain input. */
 export function weightedTokens(u: { input: number; output: number; cacheRead: number; cacheWrite: number }, p: Prices): number {
   return (u.input * p.input + u.output * p.output + u.cacheRead * p.cacheRead + u.cacheWrite * p.cacheWrite) / p.input

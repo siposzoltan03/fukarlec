@@ -3,6 +3,7 @@ import type { Register } from 'claude-code'
 
 import { addMetrics, emptyMetrics, fetchActivity, fetchKeySpend, fetchPrices, makeConn, priceFor } from './litellm'
 import type { Activity, Conn, Day, Fetch, Metrics, Prices } from './litellm'
+import type { TokenUsage } from './advice'
 import {
   cacheExpiryWarning,
   cacheSoonWarning,
@@ -13,6 +14,8 @@ import {
   restartCosts,
   compactEffectTip,
   contextGrowthTip,
+  parallelUseTip,
+  turnCost,
   failedTip,
   forecastTip,
   outputTip,
@@ -130,6 +133,11 @@ export const register: Register = (on, options) => {
   let isTurnRunning = false
   let nowMs = 0
   let soonWarnedFor = 0
+  // This session's own spend: its turns' tokens (subagents too) at the proxy's prices. The key's
+  // spend since the session started is kept beside it only to notice the key is shared.
+  let sessionCost = 0
+  let turnSpend = 0
+  const unpriced: { model: string; usage: TokenUsage }[] = []
   let expiredToldFor = 0
   // What a fresh session starts with (context after this session's first turn), and the model last used.
   let baseContextTokens = 0
@@ -154,8 +162,10 @@ export const register: Register = (on, options) => {
       } catch {}
     })
 
+  const keyDelta = (s: Snapshot) => Math.max(0, s.keySpend - (baseline ?? s.keySpend))
+
   const spendOf = (s: Snapshot): Spend => ({
-    session: Math.max(0, s.keySpend - (baseline ?? s.keySpend)),
+    session: sessionCost,
     today: s.today?.metrics.spend ?? 0,
     month: s.activity.total.spend,
   })
@@ -395,9 +405,7 @@ export const register: Register = (on, options) => {
 
   /** Prices once a session, history once a day; each failure leaves the advice that needs it out. */
   async function loadExtras($io: Io, s: Snapshot) {
-    if (Object.keys(prices).length === 0) {
-      prices = await fetchPrices($io.fetch, conn!).catch(() => ({}))
-    }
+    await ensurePrices($io)
     if (historyOn !== s.date) {
       try {
         history = (await fetchActivity($io.fetch, conn!, addDays(s.date, -56), s.date)).days
@@ -425,6 +433,7 @@ export const register: Register = (on, options) => {
       outputTip(lastActive, priceOf),
       failedTip(lastActive),
       weekdayTip(history),
+      parallelUseTip(sessionCost, keyDelta(s)),
       lastTurnEndAt > 0 && !isTurnRunning && nowMs > lastTurnEndAt + cacheTtl
         ? clearOrRewriteTip(lastContextTokens, baseContextTokens, priceOf(lastModel))
         : undefined,
@@ -434,6 +443,38 @@ export const register: Register = (on, options) => {
       tips: isFun ? list.map((t, i) => voice(t, pack(), seed + i)) : list,
       quest: questLine(s) ?? null,
     }
+  }
+
+  let pricesLoading: Promise<void> | undefined
+
+  /** The proxy's prices, fetched once; usage that waited for them is priced as they arrive. */
+  function ensurePrices($io: Io): Promise<void> {
+    if (Object.keys(prices).length > 0) return Promise.resolve()
+    pricesLoading ??= (async () => {
+      prices = await fetchPrices($io.fetch, conn!).catch(() => ({}))
+      pricesLoading = undefined
+      await priceWaitingUsage($io)
+    })()
+    return pricesLoading
+  }
+
+  /** Prices a turn's tokens into the session's spend; without the model's price, it waits for it. */
+  async function addUsage($io: Io, model: string, usage: TokenUsage): Promise<number> {
+    if (!priceOf(model)) await ensurePrices($io)
+    const price = priceOf(model)
+    if (!price) {
+      unpriced.push({ model, usage })
+      return 0
+    }
+    const cost = turnCost(usage, price, cacheTtl > 5 * 60_000)
+    sessionCost += cost
+    if (sessionId) await $io.set(`sessionCost:${sessionId}`, { at: await $io.now(), usd: sessionCost })
+    showStatus($io)
+    return cost
+  }
+
+  async function priceWaitingUsage($io: Io) {
+    for (const { model, usage } of unpriced.splice(0)) await addUsage($io, model, usage)
   }
 
   function overScopes(): Scope[] {
@@ -482,6 +523,8 @@ export const register: Register = (on, options) => {
     if (conn) {
       const $io = io
       sessionId = await $.session.id()
+      const keptCost = await $io.get(`sessionCost:${sessionId}`)
+      if (typeof keptCost?.usd === 'number') sessionCost = keptCost.usd
       const turnEnd = await $io.get(`turnEnd:${sessionId}`)
       if (typeof turnEnd?.at === 'number') lastTurnEndAt = turnEnd.at
       if (typeof turnEnd?.base === 'number') baseContextTokens = turnEnd.base
@@ -509,7 +552,7 @@ export const register: Register = (on, options) => {
       }))
       void prune($io).catch(() => {})
       const ttlEnv = await $.env.get('CLAUDE_CODE_PROMPT_CACHE_TTL')
-      const settings = (await $.settings.read()) as Record<string, unknown>
+      const settings = ((await $.settings.read().catch(() => ({}))) ?? {}) as Record<string, unknown>
       cacheTtl = cacheTtlMs(ttlEnv ?? settings.promptCacheTtl)
       $io.every(1_000, () => background(tick($io)))
       $io.every(POLL_MS, () => {
@@ -537,6 +580,7 @@ export const register: Register = (on, options) => {
   on('turn.start', async ($, e, next) => {
     if (io) {
       isTurnRunning = true
+      turnSpend = 0
       showStatus(io)
       io.redraw()
     }
@@ -551,6 +595,20 @@ export const register: Register = (on, options) => {
       if (io && sessionId) void io.set(`turnEnd:${sessionId}`, { at: lastTurnEndAt, base: baseContextTokens }).catch(() => {})
     }
     const u = e.usage
+    if (u && io && conn) {
+      turnSpend += await addUsage(io, u.model, {
+        input: u.input_tokens,
+        output: u.output_tokens,
+        cacheRead: u.cache_read_input_tokens,
+        cacheWrite: u.cache_creation_input_tokens,
+      })
+      if (e.agentId === undefined && expensiveTurn > 0 && turnSpend >= expensiveTurn) {
+        const cost = turnSpend
+        io.toast(isFun ? say(pack().turn, { cost: money(cost), kind: inKind(cost, hufRate) }, nowMs) : `Drága kör: +${money(cost)}`, 8000)
+        await update($, lastTurnAtom, () => ({ cost, inputTokens: u.input_tokens, outputTokens: u.output_tokens, at: nowMs }))
+        io.after(TURN_DISPLAY_MS, () => background(update($, lastTurnAtom, () => null)))
+      }
+    }
     if (u) {
       const tokens = u.input_tokens + u.output_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
       if (e.agentId === undefined) mainTokens += tokens
@@ -585,7 +643,6 @@ export const register: Register = (on, options) => {
             }
           }
         })())
-        const before = snap?.keySpend
         background(refresh($io, true).then(async s => {
           if (!s) return
           await update($, snapshotAtom, () => ({
@@ -594,20 +651,6 @@ export const register: Register = (on, options) => {
             date: s.date,
             stale: lastError !== undefined,
           }))
-          if (before !== undefined && expensiveTurn > 0 && s.keySpend - before >= expensiveTurn) {
-            const cost = s.keySpend - before
-            $io.toast(
-              isFun ? say(pack().turn, { cost: money(cost), kind: inKind(cost, hufRate) }, s.at) : `Drága kör: +${money(cost)}`,
-              8000,
-            )
-            await update($, lastTurnAtom, () => ({
-              cost: s.keySpend - before,
-              inputTokens: 0,
-              outputTokens: 0,
-              at: s.at,
-            }))
-            $io.after(TURN_DISPLAY_MS, () => background(update($, lastTurnAtom, () => null)))
-          }
           const advice = await adviceFor($io, s)
           await update($, adviceAtom, () => advice)
           const tip = tips(s.today, cacheWrite).find(t => !toldTips.has(`${s.date}:${t.slice(0, 2)}`))
@@ -769,6 +812,7 @@ export const register: Register = (on, options) => {
     const activity = days > 0 ? await fetchActivity(fetch, conn, start, s.date) : s.activity
     const history = budgets.daily > 0 ? await fetchActivity(fetch, conn, addDays(s.date, -60), s.date) : undefined
 
+    const parallel = parallelUseTip(sessionCost, keyDelta(s))
     return {
       text: report({
         title: days > 0 ? `🪙 Fukarléc – utolsó ${days} nap (${start} → ${s.date}, UTC)` : `🪙 Fukarléc – ${s.date.slice(0, 7)}`,
@@ -779,7 +823,7 @@ export const register: Register = (on, options) => {
         fun: isFun,
         hufRate,
         streakDays: history ? streak(history.days, s.date, budgets.daily) : 0,
-      }),
+      }) + (parallel ? `\n\n${parallel}` : ''),
     }
   })
 

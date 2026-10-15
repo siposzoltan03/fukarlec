@@ -16,7 +16,9 @@ import {
   cacheTtlMs,
   clearOrRewriteTip,
   clock,
+  parallelUseTip,
   restartCosts,
+  turnCost,
   compactEffectTip,
   contextGrowthTip,
   failedTip,
@@ -59,6 +61,10 @@ function proxy(on: On, keySpend: () => number, days: { date: string; spend: numb
       return { value: { status: 401, ok: false, headers: {}, text: '{"error":{"message":"nope"}}' } }
     }
     const url = new URL(e.url)
+    if (url.pathname === '/model/info') {
+      const info = { input_cost_per_token: 4e-6, output_cost_per_token: 2e-5, cache_read_input_token_cost: 2e-7, cache_creation_input_token_cost: 5e-6 }
+      return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ data: [{ model_name: 'claude-opus-5-5', model_info: info }] }) } }
+    }
     if (url.pathname === '/key/info') {
       return { value: { status: 200, ok: true, headers: {}, text: JSON.stringify({ info: { spend: keySpend() } }) } }
     }
@@ -82,6 +88,12 @@ function engine(on: On) {
   on('prompt.submit', ($, e) => ({ text: e.text }))
   on('ui.notify', () => ({ value: { isSent: true, channel: 'terminal_bell' } }))
   on('ui.log', () => ({ value: undefined }))
+  on('ui.invalidate', () => ({ value: undefined }))
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('turn.complete', ($, e) => ({ text: e.answer, usage: e.usage }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { tokens: 120_000, window: 1_000_000 }, rateLimits: [] } }))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('settings.read', () => ({ value: {} }))
 }
 
 function world(on: On) {
@@ -119,7 +131,7 @@ describe('pure parts', () => {
     expect(mood(0.95)).toBe('🥵')
     expect(mood(2)).toBe('💀')
     const line = statusLine({ session: 1.5, today: 45, month: 300 }, { session: 20, daily: 60, monthly: 800 }, true, false)
-    expect(line).toBe('🪙 😬 session ~$1.50/$20.00 · ma $45.00/$60.00 · hó $300/$800')
+    expect(line).toBe('🪙 😬 session $1.50/$20.00 · ma $45.00/$60.00 · hó $300/$800')
     expect(inKind(4, 350)).toBe('≈ 1 lángos 🫓')
     expect(inKind(1000, 350)).toBe('≈ 2.3 Balaton-parti hétvége 🏖️')
   })
@@ -157,10 +169,36 @@ describe('in a session', () => {
     const text = (await $.command.run(COMMAND(''))).text ?? ''
 
     expect(seen[0]).toContain('https://litellm.example.com/')
-    expect(statuses.at(-1)).toBe('🪙 😇 session ~$3.25/$20.00 · ma $12.00/$60.00 · hó $42.00/$800')
+    expect(statuses.at(-1)).toBe('🪙 😇 session $0.00/$20.00 · ma $12.00/$60.00 · hó $42.00/$800') // no turn yet
     expect(text).toContain('🪙 Fukarléc – 2026-10')
     expect(text).toContain('claude-opus-5-5')
     expect(text).toContain('Összesen: $42.00')
+  })
+
+  test('session cost comes from its own turns at the proxy prices', { options: { expensiveTurn: 0.05 } }, async ($, on) => {
+    const { statuses, toasts } = world(on)
+    let spend = 100
+    proxy(on, () => spend, [{ date: '2026-10-13', spend: 12 }])
+    await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
+    await $.turn.start({ text: 'szia', turnId: 't1' })
+    await $.turn.complete({
+      answer: 'ok',
+      durationMs: 1,
+      isAborted: false,
+      turnId: 't1',
+      reason: 'answer',
+      usage: { model: 'claude-opus-5-5', input_tokens: 1000, output_tokens: 1000, cache_read_input_tokens: 100_000, cache_creation_input_tokens: 10_000 },
+    })
+    // 1k × $4 + 1k × $20 + 100k × $0.20 + 10k × $5 per MTok = $0.094
+    const tips = (await $.command.run(COMMAND('tippek'))).text ?? ''
+    expect(statuses.at(-1)).toContain('session $0.09/$20.00')
+    expect(toasts.some(t => t.includes('+$0.09'))).toBe(true) // over the 0.05 threshold, right at the turn's end
+    expect(tips).not.toContain('👥')
+
+    spend = 105 // someone else spent $5 on the same key
+    const later = (await $.command.run(COMMAND('tippek'))).text ?? ''
+    expect(later).toContain('👥')
+    expect(statuses.at(-1)).toContain('session $0.09/$20.00') // the session's own spend did not move
   })
 
   test('block mode drops prompts over budget until /fukarlec engedd', { options: { overBudget: 'block', dailyBudget: 10 } }, async ($, on) => {
@@ -340,6 +378,14 @@ describe('advice', () => {
     expect(clearOrRewriteTip(300_000, 30_000, opus)).toContain('folytatás ~$2.04 · /compact ~$1.92 · /clear ~$0.20')
     expect(clearOrRewriteTip(300_000, 30_000, opus)).toContain('folytasd nyugodtan')
     expect(cacheSoonWarning(25_000, 300_000, opus)).toContain('/compact most (~$0.22, amíg meleg)')
+  })
+
+  test('turn cost and the shared-key check', async () => {
+    const u = { input: 1000, output: 1000, cacheRead: 100_000, cacheWrite: 10_000 }
+    expect(Math.round(turnCost(u, opus) * 1000)).toBe(94)
+    expect(Math.round(turnCost(u, opus, true) * 1000)).toBe(124) // 1 h cache writes cost 2× input
+    expect(parallelUseTip(2, 2.4)).toBeUndefined() // within the noise
+    expect(parallelUseTip(2, 6)).toContain('$6.00')
   })
 
   test('forecast and its tip', async () => {

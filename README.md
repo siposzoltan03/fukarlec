@@ -10,7 +10,10 @@ máshol némán nem csinál semmit.
 ![Status line](docs/statusline.png)
 
 Session/napi/havi költés, 5 percenként és minden kör után frissül.
-A session költése a kulcs teljes költésének változása a session indulása óta, ezért párhuzamos sessionöknél a `~` komolyan veendő.
+A session költése a session saját köreinek (subagentekkel együtt) tokenjei, a proxy `/model/info` áraival beárazva, így más
+sessionök vagy az opencode ugyanazon a kulcson nem keverednek bele. A napi és havi érték a LiteLLM valódi, számlázott összege.
+Ha a kulcs a session alatt jóval többet költ, mint maga a session, a riport és a `/fukarlec tippek` jelzi, hogy valószínűleg
+párhuzamos használat van.
 
 ### `/fukarlec` riport
 ![Riport](docs/report.png)

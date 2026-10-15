@@ -55,7 +55,7 @@ export function statusLine(spend: Spend, budgets: Budgets, fun: boolean, stale: 
   const w = worst(spend, budgets)
   const head = fun ? `🪙 ${w ? mood(w.ratio) : '😇'}` : 'fukarléc'
   const parts = [
-    part('session ~', spend.session, budgets.session).replace('~ ', '~'),
+    part('session', spend.session, budgets.session),
     part('ma', spend.today, budgets.daily),
     part('hó', spend.month, budgets.monthly),
   ]

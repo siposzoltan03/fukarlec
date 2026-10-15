@@ -1,3 +1,4 @@
+import { QUEST_XP, questFor } from './advice'
 import { addDays } from './format'
 import type { Day } from './litellm'
 
@@ -11,6 +12,8 @@ export type Ledger = {
   since: string
   /** Each credited day's garas; 0 for an active day over budget (it breaks the streak). */
   days: Record<string, number>
+  /** Bonus garas for the day's quest, by day. */
+  quests: Record<string, number>
   /** Garas spent in the shop. */
   spent: number
   /** What was bought: `skin:<id>` and `pack:<id>`. */
@@ -30,7 +33,7 @@ export const XP_STREAK_CAP = 5
 const WELCOME_DAYS = 7
 
 export function newLedger(today: string, now: number): Ledger {
-  return { since: addDays(today, -WELCOME_DAYS), days: {}, spent: 0, owned: [], skin: 'paraszt', pack: 'paraszt', updatedAt: now }
+  return { since: addDays(today, -WELCOME_DAYS), days: {}, quests: {}, spent: 0, owned: [], skin: 'paraszt', pack: 'paraszt', updatedAt: now }
 }
 
 /** Reads back whatever the store held, filling what an older version did not write. */
@@ -41,6 +44,7 @@ export function asLedger(value: unknown, today: string, now: number): Ledger {
   return {
     since: typeof v.since === 'string' ? v.since : fresh.since,
     days: v.days && typeof v.days === 'object' ? { ...v.days } : {},
+    quests: v.quests && typeof v.quests === 'object' ? { ...v.quests } : {},
     spent: typeof v.spent === 'number' ? v.spent : 0,
     owned: Array.isArray(v.owned) ? [...v.owned] : [],
     skin: typeof v.skin === 'string' ? v.skin : 'paraszt',
@@ -79,11 +83,12 @@ export function credit(
   days: readonly Day[],
   today: string,
   budget: number,
-): { ledger: Ledger; gained: number; credited: string[] } {
-  const next: Ledger = { ...ledger, days: { ...ledger.days } }
+): { ledger: Ledger; gained: number; credited: string[]; quests: string[] } {
+  const next: Ledger = { ...ledger, days: { ...ledger.days }, quests: { ...ledger.quests } }
   const credited: string[] = []
+  const quests: string[] = []
   let gained = 0
-  if (budget <= 0) return { ledger: next, gained, credited }
+  if (budget <= 0) return { ledger: next, gained, credited, quests }
   for (const day of [...days].sort((a, b) => a.date.localeCompare(b.date))) {
     if (day.date >= today || day.date < next.since || next.days[day.date] !== undefined) continue
     if (day.metrics.spend <= 0) continue
@@ -91,12 +96,19 @@ export function credit(
     next.days[day.date] = xp
     credited.push(day.date)
     gained += xp
+    // The quest pays only on a day that stayed within budget.
+    if (xp > 0 && questFor(day.date).done(day, budget)) {
+      next.quests[day.date] = QUEST_XP
+      quests.push(day.date)
+      gained += QUEST_XP
+    }
   }
-  return { ledger: next, gained, credited }
+  return { ledger: next, gained, credited, quests }
 }
 
 export function earned(ledger: Ledger): number {
-  return Object.values(ledger.days).reduce((n, xp) => n + xp, 0)
+  const sum = (r: Record<string, number>) => Object.values(r).reduce((n, xp) => n + xp, 0)
+  return sum(ledger.days) + sum(ledger.quests)
 }
 
 export function balance(ledger: Ledger): number {

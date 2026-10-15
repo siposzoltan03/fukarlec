@@ -18,6 +18,8 @@ export type Pack = {
   turn: readonly string[]
   /** XP credited for yesterday's thrift. */
   xp: readonly string[]
+  /** Said before a savings tip, so tips speak in the pack's voice; '' leaves the tip as is. */
+  tipIntro: readonly string[]
   /** The pane's speech bubble, by the mascot's mood. */
   sayings: Readonly<Record<BacsiMood, readonly string[]>>
 }
@@ -39,6 +41,7 @@ const paraszt: Pack = {
   ],
   turn: ['💸 Ez a kör +{cost} volt ({kind}). Megérte?'],
   xp: ['🪙 +{xp} garas a tegnapi fukarkodásért!', '🌾 Jó termés volt tegnap: +{xp} garas.'],
+  tipIntro: ['Hallgass rám, fiam: ', 'Okos gazda így tenne: ', ''],
   sayings: {
     nyugodt: [
       'Így kell ezt, fiam. Garast a garasra!',
@@ -75,6 +78,7 @@ const nagymama: Pack = {
   ],
   turn: ['🍪 +{cost} egy körre? Abból sütöttem volna egy tálca pogácsát.'],
   xp: ['🍰 +{xp} garas, mert tegnap spóroltál. Büszke vagyok rád, kincsem!'],
+  tipIntro: ['Kisfiam, ', 'Csillagom, egy jó tanács: ', 'Ne haragudj, de '],
   sayings: {
     nyugodt: ['Jól van, kincsem, okosan csinálod.', 'Egyél még egy kis rétest!', 'Látod, így kell beosztani.'],
     aggodo: ['Kisfiam, nem költesz te túl sokat?', 'Jaj, csak meg ne fázz... meg túl ne költs.', 'Anyád is mindig így kezdte.'],
@@ -103,6 +107,7 @@ const nav: Pack = {
   ],
   turn: ['🧾 Egyedi tétel rögzítve: +{cost}. Bizonylatot kérünk.'],
   xp: ['📄 Adójóváírás: +{xp} garas. Megőrzési idő: 8 év.'],
+  tipIntro: ['Hatósági javaslat: ', 'Ellenőrzési megállapítás: ', 'Felhívjuk figyelmét: '],
   sayings: {
     nyugodt: ['Az ügyfél adatai rendben.', 'Bevallás határidőben beérkezett.', 'Nincs további teendő.'],
     aggodo: ['Az ügyet felülvizsgálatra kijelöltük.', 'Kérjük, tartsa kéznél a bizonylatokat.', 'Szúrópróbaszerű ellenőrzés várható.'],
@@ -127,6 +132,7 @@ const betyar: Pack = {
   ],
   turn: ['🐴 +{cost} egy körért? Ennyiért lovat lopok, nem tokent!'],
   xp: ['💰 +{xp} garas zsákmány a tegnapi portyáról!'],
+  tipIntro: ['Hallod-e, komám: ', 'Betyárbecsületre: ', 'Súgom, mint betyár a betyárnak: '],
   sayings: {
     nyugodt: ['Szabad a puszta, tele a tarisznya.', 'Gazdagtól veszek, szegénynek adok.', 'Ma nem kell bujdosni.'],
     aggodo: ['Hallom a pandúrok lovát...', 'Kevés már a tallér a tarisznyában.', 'Ideje lesz a nádasba húzódni.'],
@@ -151,6 +157,7 @@ const kocsmai: Pack = {
   ],
   turn: ['🍺 +{cost} egy körért? Ennyiért az egész kocsmának fizetek egyet!'],
   xp: ['🍻 +{xp} garas! Tegnap józanul költöttél, egészségedre!'],
+  tipIntro: ['Figyu, komám: ', 'Mondom én a pultnál: ', 'Igyunk rá, de előbb: '],
   sayings: {
     nyugodt: ['Egy kis fröccs, egy kis kód, így szép az élet.', 'Jó a hangulat, olcsó a kör.', 'Ma még én fizetek.'],
     aggodo: ['Komám, kezd nőni a cetli a pult alatt...', 'Lassan a kocsmáros is ránk néz.', 'Még egy kör, aztán haza.'],
@@ -169,4 +176,17 @@ export function fill(template: string, values: Readonly<Record<string, string | 
 
 export function pickLine(list: readonly string[], seed: number): string {
   return list[Math.abs(Math.floor(seed)) % list.length]!
+}
+
+/** A tip (`<emoji> <text>`) in the pack's voice: the emoji, an intro, then the text. */
+export function voice(tip: string, pack: Pack, seed: number): string {
+  const intro = pack.tipIntro.length > 0 ? pickLine(pack.tipIntro, seed) : ''
+  if (!intro) return tip
+  const match = /^(\S+)\s+(.*)$/su.exec(tip)
+  if (!match) return intro + tip
+  const [, emoji, text] = match
+  const firstWord = text!.split(/\s/, 1)[0]!
+  const isName = /^(Opus|Sonnet|Haiku|Claude|LiteLLM|NAV)\b/.test(firstWord)
+  const lowered = !isName && /^[A-ZÁÉÍÓÖŐÚÜŰ]([a-záéíóöőúüű]|\s)/.test(text!) ? text!.charAt(0).toLowerCase() + text!.slice(1) : text!
+  return `${emoji} ${intro}${lowered}`
 }

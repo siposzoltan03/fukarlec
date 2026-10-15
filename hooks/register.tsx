@@ -1,8 +1,23 @@
 import { atom, read, update } from 'claude-code'
 import type { Register } from 'claude-code'
 
-import { addMetrics, emptyMetrics, fetchActivity, fetchKeySpend, makeConn } from './litellm'
-import type { Activity, Conn, Day, Fetch, Metrics } from './litellm'
+import { addMetrics, emptyMetrics, fetchActivity, fetchKeySpend, fetchPrices, makeConn, priceFor } from './litellm'
+import type { Activity, Conn, Day, Fetch, Metrics, Prices } from './litellm'
+import {
+  cacheExpiryWarning,
+  compactEffectTip,
+  contextGrowthTip,
+  failedTip,
+  forecastTip,
+  outputTip,
+  QUEST_XP,
+  questFor,
+  repeatReadTip,
+  subagentTip,
+  toolOutputTip,
+  weekdayTip,
+  weightedTokens,
+} from './advice'
 import {
   addDays,
   colorDotRasterCells,
@@ -23,9 +38,9 @@ import {
   worst,
 } from './format'
 import type { Budgets, Scope, Spend } from './format'
-import type { SnapshotState, TurnCost, XpView } from '../types'
+import type { AdviceView, SnapshotState, TurnCost, XpView } from '../types'
 import { BACSI_COLUMNS, BACSI_ROWS, bacsiMood, bacsiRasterCells } from './bacsi'
-import { fill, packById, PACKS, pickLine } from './packs'
+import { fill, packById, PACKS, pickLine, voice } from './packs'
 import type { Pack } from './packs'
 import { skinById, SKINS } from './skins'
 import { asLedger, balance, buy, credit, creditFrom, earned, owns, progressBar, rankOf, wear } from './xp'
@@ -54,12 +69,16 @@ type Io = {
   debug: (text: string) => void
   every: (ms: number, fn: () => void) => void
   after: (ms: number, fn: () => void) => void
+  /** Tokens in the live context window, as the status line counts them. */
+  contextTokens: () => Promise<number>
+  model: () => Promise<string>
 }
 
 const snapshotAtom = atom({ plugin: 'fukarlec', key: 'snapshot' } as const, null as SnapshotState | null)
 const lastTurnAtom = atom({ plugin: 'fukarlec', key: 'lastTurn' } as const, null as TurnCost | null)
 const bandHiddenAtom = atom({ plugin: 'fukarlec', key: 'bandHidden' } as const, false)
 const xpAtom = atom({ plugin: 'fukarlec', key: 'xp' } as const, null as XpView | null)
+const adviceAtom = atom({ plugin: 'fukarlec', key: 'advice' } as const, null as AdviceView | null)
 
 const XP_KEY = 'xp'
 
@@ -89,9 +108,22 @@ export const register: Register = (on, options) => {
   let lastError: string | undefined
   let inflight: Promise<Snapshot | undefined> | undefined
   let lastTipAt = 0
-  const shownTips = new Set<string>()
   let ledger: Ledger | undefined
   let creditedOn = ''
+
+  // What the advice reads beyond the snapshot: model prices, eight weeks of history,
+  // and this session's own turns and tool calls.
+  let prices: Record<string, Prices> = {}
+  let history: Day[] = []
+  let historyOn = ''
+  let lastTurnEndAt = 0
+  let lastContextTokens = 0
+  let mainTokens = 0
+  let subTokens = 0
+  const turnWeights: number[] = []
+  let compact: { before: number[]; after: number[] } | undefined
+  const readCounts = new Map<string, number>()
+  const toldTips = new Set<string>()
 
   const pack = (): Pack => packById(ledger?.pack)
   const say = (lines: readonly string[], vars: Readonly<Record<string, string | number>>, seed: number) =>
@@ -187,23 +219,27 @@ export const register: Register = (on, options) => {
 
   function paneTipFromActivity(activity: Activity, today: Day | undefined, _b: Budgets): string | undefined {
     const t = activity.total
-    if (!today) return undefined
-    const m = today.metrics
-    const todayModels = Object.entries(today.models).filter(([, mm]) => mm.spend > 0.1)
-    const opus = todayModels.find(([n]) => /opus/i.test(n))
-    if (opus && m.spend > 0 && opus[1].spend / m.spend > 0.7) {
-      const pct = Math.round((opus[1].spend / m.spend) * 100)
-      return `🧠 Ma ${pct}% Opus. Rutinmunkára /model sonnet olcsóbb.`
-    }
-    const input = m.promptTokens
-    if (input > 500_000 && m.cacheRead / input < 0.7) {
-      return `🧊 Cache hit ma ${Math.round((m.cacheRead / input) * 100)}%. Modellváltás és /clear rontja.`
-    }
-    if (m.completionTokens > 0 && m.promptTokens / m.completionTokens > 15) {
-      return '📐 Hosszú context, kevés output — /compact csökkenti a prompt tokent.'
-    }
-    if (todayModels.length > 3) {
-      return `🔀 Ma ${todayModels.length} modellt használtál. Modellváltás cache-t invalidál.`
+    // Before today's first request (every day after 00:00 UTC) read the last active day instead.
+    const day = today ?? activity.days.filter(d => d.metrics.spend > 0).at(-1)
+    if (day) {
+      const when = today ? 'Ma' : 'Legutóbb'
+      const m = day.metrics
+      const dayModels = Object.entries(day.models).filter(([, mm]) => mm.spend > 0.1)
+      const opus = dayModels.find(([n]) => /opus/i.test(n))
+      if (opus && m.spend > 0 && opus[1].spend / m.spend > 0.7) {
+        const pct = Math.round((opus[1].spend / m.spend) * 100)
+        return `🧠 ${when} ${pct}% Opus. Rutinmunkára /model sonnet olcsóbb.`
+      }
+      const input = m.promptTokens
+      if (input > 500_000 && m.cacheRead / input < 0.7) {
+        return `🧊 ${when} a cache hit ${Math.round((m.cacheRead / input) * 100)}%. Modellváltás és /clear rontja.`
+      }
+      if (m.completionTokens > 0 && m.promptTokens / m.completionTokens > 15) {
+        return '📐 Hosszú context, kevés output — /compact csökkenti a prompt tokent.'
+      }
+      if (dayModels.length > 3) {
+        return `🔀 ${when} ${dayModels.length} modellt használtál. Modellváltás cache-t invalidál.`
+      }
     }
     if (t.cacheSaved > 0) {
       return `🦸 A cache eddig ${money(t.cacheSaved)}-t spórolt — ${Math.round(t.cacheSaved / (t.spend + t.cacheSaved) * 100)}% megtakarítás.`
@@ -221,9 +257,13 @@ export const register: Register = (on, options) => {
       `Skin: ${skinById(l.skin).name} · Pack: ${packById(l.pack).name}`,
       '',
       recent.length > 0
-        ? `Utolsó napok: ${recent.map(([d, xp]) => `${d.slice(5)} ${xp > 0 ? `+${xp}` : '0 🔥'}`).join(' · ')}`
+        ? `Utolsó napok: ${recent
+            .map(([d, xp]) => `${d.slice(5)} ${xp > 0 ? `+${xp + (l.quests[d] ?? 0)}${l.quests[d] ? '🎯' : ''}` : '0 🔥'}`)
+            .join(' · ')}`
         : 'Még nincs jóváírt nap: a lezárt (UTC) napokért jár garas.',
-      `Szabály: napi keret (${money(budgets.daily)}) alatti aktív nap = 10 + max 10 a spórolásért + sorozat-bónusz (max +10).`,
+      `Szabály: napi keret (${money(budgets.daily)}) alatti aktív nap = 10 + max 10 a spórolásért + sorozat-bónusz (max +10),`,
+      `a teljesített napi küldetés +${QUEST_XP}.`,
+      ...(snap ? [questLine(snap) ?? ''] : []),
     ].join('\n')
   }
 
@@ -270,7 +310,8 @@ export const register: Register = (on, options) => {
         const result = credit(l, activity.days, s.date, budgets.daily)
         l = result.ledger
         if (result.gained > 0) {
-          $io.toast(isFun ? say(pack().xp, { xp: result.gained }, s.at) : `fukarléc: +${result.gained} XP`, 10_000)
+          const quests = result.quests.length > 0 ? ` 🎯 (${result.quests.length} küldetés)` : ''
+          $io.toast((isFun ? say(pack().xp, { xp: result.gained }, s.at) : `fukarléc: +${result.gained} XP`) + quests, 10_000)
         }
       } catch (err) {
         $io.debug(`fukarlec xp: ${err instanceof Error ? err.message : String(err)}`)
@@ -280,6 +321,61 @@ export const register: Register = (on, options) => {
     await saveLedger($io, l)
     creditedOn = s.date
     return xpView(l)
+  }
+
+  /**
+   * Toasts a tip once per key, in the pack's voice. Ordinary tips keep 30 minutes
+   * apart; urgent ones (about the turn at hand) only never repeat.
+   */
+  async function offerTip($io: Io, key: string, tip: string | undefined, urgent = false) {
+    if (!tip || toldTips.has(key)) return
+    const now = await $io.now()
+    if (!urgent && now - lastTipAt < TIP_EVERY_MS) return
+    toldTips.add(key)
+    if (!urgent) lastTipAt = now
+    $io.toast(isFun ? voice(tip, pack(), now) : tip.replace(/^\S+\s/, 'Tipp: '), 15_000)
+  }
+
+  const priceOf = (model: string) => priceFor(prices, model)
+
+  /** Prices once a session, history once a day; each failure leaves the advice that needs it out. */
+  async function loadExtras($io: Io, s: Snapshot) {
+    if (Object.keys(prices).length === 0) {
+      prices = await fetchPrices($io.fetch, conn!).catch(() => ({}))
+    }
+    if (historyOn !== s.date) {
+      try {
+        history = (await fetchActivity($io.fetch, conn!, addDays(s.date, -56), s.date)).days
+        historyOn = s.date
+      } catch (err) {
+        $io.debug(`fukarlec history: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
+  }
+
+  function questLine(s: Snapshot): string | undefined {
+    if (budgets.daily <= 0) return undefined
+    const q = questFor(s.date)
+    const sofar = s.today ? (q.done(s.today, budgets.daily) ? ' · eddig ✅' : ' · eddig ❌') : ''
+    return `🎯 Mai küldetés: ${q.text} (+${QUEST_XP} garas)${sofar}`
+  }
+
+  /** The advice that rests on LiteLLM's numbers, freshest first. */
+  async function adviceFor($io: Io, s: Snapshot): Promise<AdviceView> {
+    await loadExtras($io, s)
+    const lastActive = s.today ?? s.activity.days.filter(d => d.metrics.spend > 0).at(-1)
+    const list = [
+      ...tips(s.today, 0),
+      forecastTip(s.activity.total.spend, s.date, budgets.monthly),
+      outputTip(lastActive, priceOf),
+      failedTip(lastActive),
+      weekdayTip(history),
+    ].filter((t): t is string => t !== undefined)
+    const seed = Number(s.date.slice(8))
+    return {
+      tips: isFun ? list.map((t, i) => voice(t, pack(), seed + i)) : list,
+      quest: questLine(s) ?? null,
+    }
   }
 
   function overScopes(): Scope[] {
@@ -311,6 +407,8 @@ export const register: Register = (on, options) => {
       debug: text => $.ui.log(text, { to: 'debug' }),
       every: (ms, fn) => void $.clock.every(ms, fn),
       after: (ms, fn) => void $.clock.after(ms, fn),
+      contextTokens: async () => (await $.session.usage()).context.tokens ?? 0,
+      model: () => $.session.model(),
     }
     await $.command.register({
       name: 'fukarlec',
@@ -338,6 +436,8 @@ export const register: Register = (on, options) => {
           }))
           const view = await creditXp($io, s)
           await update($, xpAtom, () => view)
+          const advice = await adviceFor($io, s)
+          await update($, adviceAtom, () => advice)
         }
       })
       void prune($io).catch(() => {})
@@ -352,6 +452,8 @@ export const register: Register = (on, options) => {
             }))
             const view = await creditXp($io, s)
             await update($, xpAtom, () => view)
+            const advice = await adviceFor($io, s)
+            await update($, adviceAtom, () => advice)
           }
         })
       })
@@ -362,10 +464,41 @@ export const register: Register = (on, options) => {
   // --- turn.complete -----------------------------------------------------------
 
   on('turn.complete', async ($, e, next) => {
+    const u = e.usage
+    if (u) {
+      const tokens = u.input_tokens + u.output_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens
+      if (e.agentId === undefined) mainTokens += tokens
+      else subTokens += tokens
+    }
     if (conn && io && e.agentId === undefined) {
       const $io = io
       const cacheWrite = e.usage?.cache_creation_input_tokens ?? 0
+      const price = u && priceOf(u.model)
+      if (u && price) {
+        const weight = weightedTokens(
+          { input: u.input_tokens, output: u.output_tokens, cacheRead: u.cache_read_input_tokens, cacheWrite: u.cache_creation_input_tokens },
+          price,
+        )
+        turnWeights.push(weight)
+        if (turnWeights.length > 50) turnWeights.shift()
+        if (compact) compact.after.push(weight)
+      }
       $io.after(0, () => {
+        void (async () => {
+          lastTurnEndAt = await $io.now()
+          lastContextTokens = await $io.contextTokens().catch(() => lastContextTokens)
+          const model = await $io.model().catch(() => '')
+          const step = Math.floor(lastContextTokens / 100_000)
+          await offerTip($io, `ctx:${step}`, contextGrowthTip(lastContextTokens, priceOf(model)))
+          await offerTip($io, 'sub', subagentTip(mainTokens, subTokens))
+          if (compact) {
+            const tip = compactEffectTip(compact.before, compact.after)
+            if (tip || compact.after.length >= 3) {
+              await offerTip($io, `compact:${turnWeights.length}`, tip, true)
+              compact = undefined
+            }
+          }
+        })()
         const before = snap?.keySpend
         void refresh($io, true).then(async s => {
           if (!s) return
@@ -389,21 +522,55 @@ export const register: Register = (on, options) => {
             }))
             $io.after(TURN_DISPLAY_MS, () => void update($, lastTurnAtom, () => null))
           }
-          if (s.at - lastTipAt < TIP_EVERY_MS) return
-          const tip = tips(s.today, cacheWrite).find(t => !shownTips.has(`${s.date}:${t.slice(0, 2)}`))
-          if (!tip) return
-          shownTips.add(`${s.date}:${tip.slice(0, 2)}`)
-          lastTipAt = s.at
-          $io.toast(isFun ? tip : tip.replace(/^\S+\s/, 'Tipp: '), 15_000)
+          const advice = await adviceFor($io, s)
+          await update($, adviceAtom, () => advice)
+          const tip = tips(s.today, cacheWrite).find(t => !toldTips.has(`${s.date}:${t.slice(0, 2)}`))
+          if (tip) await offerTip($io, `${s.date}:${tip.slice(0, 2)}`, tip)
         })
       })
     }
     return next(e)
   })
 
-  // --- prompt.submit (budget gate) ---------------------------------------------
+  // --- tool.call: outputs that fill the context ----------------------------------
+
+  on('tool.call', async ($, e, next) => {
+    const ran = await next(e)
+    if (!conn || !io || e.agentId !== undefined || ran.deny !== undefined) return ran
+    const chars = (ran.text ?? JSON.stringify(ran.result ?? '')).length
+    if (e.tool === 'Read') {
+      const count = (readCounts.get(e.file_path) ?? 0) + 1
+      readCounts.set(e.file_path, count)
+      await offerTip(io, `read:${e.file_path}`, repeatReadTip(e.file_path, count), true)
+      await offerTip(io, `out:Read:${e.file_path}`, toolOutputTip('Read', e.file_path.replace(/^.*\//, ''), chars), true)
+    } else if (e.tool === 'Bash') {
+      const what = e.command.trim().split(/\s+/).slice(0, 2).join(' ')
+      await offerTip(io, `out:Bash:${what}`, toolOutputTip('Bash', what, chars), true)
+    } else {
+      await offerTip(io, `out:${e.tool}`, toolOutputTip(String(e.tool), '', chars), true)
+    }
+    return ran
+  }).catch(($, e, next) => next(e))
+
+  // --- session.compact: measure what it saved ------------------------------------
+
+  on('session.compact', async ($, e, next) => {
+    const done = await next(e)
+    if (e.agentId === undefined && !('skip' in done) && turnWeights.length >= 3) {
+      compact = { before: turnWeights.slice(-3), after: [] }
+    }
+    return done
+ }).catch(($, e, next) => next(e))
+
+  // --- prompt.submit: cache-expiry warning, then the budget gate -----------------
 
   on('prompt.submit', async ($, e, next) => {
+    // An expired cache, said before the turn pays for it.
+    if (conn && io && lastTurnEndAt > 0 && e.origin.kind === 'composer') {
+      const idle = (await $.clock.now()) - lastTurnEndAt
+      const warning = cacheExpiryWarning(idle, lastContextTokens, priceOf(await $.session.model()))
+      await offerTip(io, `cache:${lastTurnEndAt}`, warning, true)
+    }
     if (!isBlocking || !conn || !snap || (e.origin.kind !== 'composer' && e.origin.kind !== 'bridge')) return next(e)
     const over = overScopes()
     if (over.length === 0 || (await $.store.get(`unlock:${snap.date}`)) !== undefined) return next(e)
@@ -430,6 +597,7 @@ export const register: Register = (on, options) => {
           '/fukarlec frissít    – adatok újratöltése',
           '/fukarlec engedd     – keret feletti blokk feloldása mára',
           '/fukarlec panel      – költség-dashboard megnyitása',
+          '/fukarlec tippek     – minden aktuális spórolási tipp és a mai küldetés',
           '/fukarlec xp         – rangod és garasaid',
           '/fukarlec bolt       – skinek és üzenet-packek',
           '/fukarlec vesz <id>  – vásárlás garasért (utána fel is veszi)',
@@ -455,6 +623,18 @@ export const register: Register = (on, options) => {
     if (!s) return { text: `Fukarléc: a LiteLLM nem válaszol (${lastError ?? 'ismeretlen hiba'}).` }
 
     const [verb = '', ...rest] = arg.split(/\s+/)
+    if (verb === 'tippek' || verb === 'tipp') {
+      const advice = await adviceFor($io, s)
+      await update($, adviceAtom, () => advice)
+      const quest = budgets.daily > 0 ? questLine(s) : undefined
+      return {
+        text: [
+          '💡 Spórolási tippek',
+          ...(advice.tips.length > 0 ? advice.tips.map(t => `  ${t}`) : ['  Most nincs konkrét tipp — szép munka!']),
+          ...(quest ? ['', quest] : []),
+        ].join('\n'),
+      }
+    }
     if (['xp', 'bolt', 'vesz', 'skin', 'pack'].includes(verb)) {
       const view = await creditXp($io, s)
       await update($, xpAtom, () => view)
@@ -523,6 +703,7 @@ export const register: Register = (on, options) => {
     if (e.surface !== 'terminal') return next(e) // Raster is a terminal element
     const state = await read($, snapshotAtom)
     const xp = await read($, xpAtom)
+    const advice = await read($, adviceAtom)
     const { Box, Text, Raster } = $.ui.resolve(e)
     const paneCols = e.props.bodyColumns ?? 40
 
@@ -572,7 +753,7 @@ export const register: Register = (on, options) => {
 
     const todayDay = activity.days.find(d => d.date === date)
     const todayTips = todayDay ? tips(todayDay, 0) : []
-    const paneTip = todayTips[0] ?? paneTipFromActivity(activity, todayDay, budgets)
+    const paneTip = todayTips[0] ?? advice?.tips[0] ?? paneTipFromActivity(activity, todayDay, budgets)
     const paneSparkValues: number[] = []
     for (const v of sparkValues) {
       for (let c = 0; c < colsPerDay; c++) paneSparkValues.push(v)
@@ -649,6 +830,7 @@ export const register: Register = (on, options) => {
             <Text> </Text>
             <Text bold>Tipp</Text>
             <Text dimColor>{paneTip}</Text>
+            {isFun && advice?.quest && <Text dimColor>{advice.quest}</Text>}
           </Box>
         )}
         {isFun && paneCols >= BACSI_COLUMNS + 2 && <Text> </Text>}

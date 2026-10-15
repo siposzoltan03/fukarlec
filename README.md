@@ -42,6 +42,18 @@ Hangulat-emoji (😇 → 🙂 → 😬 → 🥵 → 🔥 → 💀), Fukar bácsi
 
 A napok UTC szerint értendők, ahogy a LiteLLM számol.
 
+## Spórolási tippek
+
+A tippek toastként jönnek (a sima tippek legfeljebb 30 percenként egy, a sürgősek azonnal, de mindegyik csak egyszer),
+a panel Tipp blokkjában, és mind egyben: `/fukarlec tippek`. A felvett üzenet-pack hangján szólnak.
+
+- **Session közben:** ⏳ lejárt cache (5+ perc szünet után a következő kör újraírja a contextet – még küldés előtt szól,
+  becsült összeggel), 🐘 hízó context, 📦 óriási Bash/Read kimenet, 🔁 ugyanaz a fájl sokszor beolvasva,
+  🤖 subagent-túlsúly, ✂️ mennyit spórolt a /compact.
+- **A LiteLLM számaiból:** 📈 hó végi előrejelzés a havi kerethez, ✍️ drága output-arány, ⚠️ hibás kérések,
+  📅 a hét legdrágább napja, 🧠 Opus-túlsúly, 🧊 alacsony cache hit. Az árakat a proxy `/model/info`-ja adja.
+- **🎯 Napi küldetés:** pl. „maradj 50% Opus alatt”; ha a lezárt nap kereten belül volt és teljesült, +5 garas.
+
 ## Garas, rangok, bolt
 
 Minden lezárt (UTC) nap, amikor dolgoztál, de a napi keret alatt maradtál, **garast** (XP) hoz:

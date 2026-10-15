@@ -15,6 +15,7 @@ export type Metrics = {
   cacheWrite: number
   cacheSaved: number
   requests: number
+  failed: number
 }
 
 export type Day = { date: string; metrics: Metrics; models: Record<string, Metrics> }
@@ -29,6 +30,7 @@ export const emptyMetrics = (): Metrics => ({
   cacheWrite: 0,
   cacheSaved: 0,
   requests: 0,
+  failed: 0,
 })
 
 export function addMetrics(a: Metrics, b: Metrics): Metrics {
@@ -40,6 +42,7 @@ export function addMetrics(a: Metrics, b: Metrics): Metrics {
     cacheWrite: a.cacheWrite + b.cacheWrite,
     cacheSaved: a.cacheSaved + b.cacheSaved,
     requests: a.requests + b.requests,
+    failed: a.failed + b.failed,
   }
 }
 
@@ -98,6 +101,7 @@ function toMetrics(m: any): Metrics {
     cacheWrite: Number(m?.cache_creation_input_tokens ?? 0),
     cacheSaved: Number(m?.prompt_caching_savings_spend ?? 0),
     requests: Number(m?.api_requests ?? 0),
+    failed: Number(m?.failed_requests ?? 0),
   }
 }
 
@@ -124,10 +128,45 @@ export async function fetchActivity(fetch: Fetch, conn: Conn, start: string, end
         cache_creation_input_tokens: meta.total_cache_creation_input_tokens,
         prompt_caching_savings_spend: meta.total_prompt_caching_savings_spend,
         api_requests: meta.total_api_requests,
+        failed_requests: meta.total_failed_requests,
       })
     }
     if (!meta.has_more) break
   }
   days.sort((a, b) => a.date.localeCompare(b.date))
   return { days, total }
+}
+
+/** USD per token, as the proxy bills it. */
+export type Prices = { input: number; output: number; cacheRead: number; cacheWrite: number }
+
+/** Every model's prices from `/model/info`, keyed by the model name the proxy serves it under. */
+export async function fetchPrices(fetch: Fetch, conn: Conn): Promise<Record<string, Prices>> {
+  const body = await getJson(fetch, conn, '/model/info')
+  const prices: Record<string, Prices> = {}
+  for (const m of body?.data ?? []) {
+    const i = m?.model_info ?? {}
+    const input = Number(i.input_cost_per_token ?? 0)
+    if (!m?.model_name || input <= 0) continue
+    prices[String(m.model_name)] = {
+      input,
+      output: Number(i.output_cost_per_token ?? input * 5),
+      cacheRead: Number(i.cache_read_input_token_cost ?? input * 0.1),
+      cacheWrite: Number(i.cache_creation_input_token_cost ?? input * 1.25),
+    }
+  }
+  return prices
+}
+
+const bareModel = (name: string) => name.replace(/^.*\//, '').replace(/\[.*\]$/, '').toLowerCase()
+
+/** A model's prices by its name as Claude Code or the daily breakdown spells it (`azure_ai/…`, `…[1m]`, `opus`). */
+export function priceFor(prices: Readonly<Record<string, Prices>>, model: string): Prices | undefined {
+  const want = bareModel(model)
+  const names = Object.keys(prices)
+  const exact = names.find(n => bareModel(n) === want)
+  if (exact) return prices[exact]
+  const family = ['opus', 'sonnet', 'haiku'].find(f => want.includes(f))
+  const same = family && names.filter(n => bareModel(n).includes(family)).sort().reverse()[0]
+  return same ? prices[same] : undefined
 }

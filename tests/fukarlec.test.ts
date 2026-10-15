@@ -2,13 +2,28 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { inKind, mood, statusLine, streak, tips } from '../hooks/format'
-import { makeConn, parseCustomHeaders } from '../hooks/litellm'
+import { makeConn, parseCustomHeaders, priceFor } from '../hooks/litellm'
 import { BACSI_COLUMNS, BACSI_PIXEL_ROWS, BACSI_ROWS, bacsiMood, bacsiPixels, bacsiRasterCells } from '../hooks/bacsi'
-import { fill, PACKS, packById } from '../hooks/packs'
+import { fill, PACKS, packById, voice } from '../hooks/packs'
 import { SKINS, skinById } from '../hooks/skins'
 import { balance, buy, credit, creditFrom, dayXp, newLedger, rankOf, wear } from '../hooks/xp'
 import type { ShopItem } from '../hooks/xp'
-import type { Day } from '../hooks/litellm'
+import type { Day, Prices } from '../hooks/litellm'
+import {
+  cacheExpiryWarning,
+  compactEffectTip,
+  contextGrowthTip,
+  failedTip,
+  forecast,
+  forecastTip,
+  outputTip,
+  QUESTS,
+  questFor,
+  repeatReadTip,
+  subagentTip,
+  toolOutputTip,
+  weekdayTip,
+} from '../hooks/advice'
 
 const NOW = Date.parse('2026-10-13T12:00:00Z')
 
@@ -112,10 +127,10 @@ describe('pure parts', () => {
   test('tips rest on the numbers', async () => {
     const today: Day = {
       date: '2026-10-13',
-      metrics: { spend: 20, promptTokens: 3e6, completionTokens: 1e4, cacheRead: 1e6, cacheWrite: 0, cacheSaved: 0, requests: 1 },
+      metrics: { spend: 20, promptTokens: 3e6, completionTokens: 1e4, cacheRead: 1e6, cacheWrite: 0, cacheSaved: 0, requests: 1, failed: 0 },
       models: {
-        'azure_ai/claude-opus-5-5': { spend: 19, promptTokens: 1e6, completionTokens: 0, cacheRead: 0, cacheWrite: 0, cacheSaved: 0, requests: 1 },
-        'azure_ai/claude-sonnet-5-5': { spend: 1, promptTokens: 2e5, completionTokens: 0, cacheRead: 0, cacheWrite: 0, cacheSaved: 0, requests: 1 },
+        'azure_ai/claude-opus-5-5': { spend: 19, promptTokens: 1e6, completionTokens: 0, cacheRead: 0, cacheWrite: 0, cacheSaved: 0, requests: 1, failed: 0 },
+        'azure_ai/claude-sonnet-5-5': { spend: 1, promptTokens: 2e5, completionTokens: 0, cacheRead: 0, cacheWrite: 0, cacheSaved: 0, requests: 1, failed: 0 },
       },
     }
     const out = tips(today, 200_000)
@@ -219,7 +234,9 @@ describe('XP', () => {
     const { ledger, gained, credited } = credit(start, days, '2026-10-14', 25)
     expect(credited).toEqual(['2026-10-07', '2026-10-08', '2026-10-09', '2026-10-12']) // not before `since`, not today
     expect(ledger.days).toEqual({ '2026-10-07': 12, '2026-10-08': 18, '2026-10-09': 0, '2026-10-12': 18 })
-    expect(gained).toBe(48)
+    const questBonus = Object.values(ledger.quests).reduce((n, xp) => n + xp, 0)
+    expect(gained).toBe(48 + questBonus) // days + the quests met on them
+    expect(Object.keys(ledger.quests).every(d => ledger.days[d]! > 0)).toBe(true) // never on a day over budget
     expect(creditFrom(ledger)).toBe('2026-10-13')
 
     // frozen: crediting again with a bigger budget changes nothing
@@ -256,5 +273,94 @@ describe('XP', () => {
     expect(rankOf(160).name).toBe('Béres')
     expect(rankOf(250).progress).toBe(0.5)
     expect(rankOf(5000).next).toBeUndefined()
+  })
+})
+
+describe('advice', () => {
+  const opus: Prices = { input: 4e-6, output: 2e-5, cacheRead: 2e-7, cacheWrite: 5e-6 }
+  const sonnet: Prices = { input: 2e-6, output: 1e-5, cacheRead: 2e-7, cacheWrite: 2.5e-6 }
+  const metrics = (spend: number, extra: Partial<Day['metrics']> = {}) => ({
+    spend, promptTokens: 0, completionTokens: 0, cacheRead: 0, cacheWrite: 0, cacheSaved: 0, requests: 10, failed: 0, ...extra,
+  })
+
+  test('model prices match however the model is spelled', async () => {
+    const prices = { 'claude-opus-5-5': opus, 'claude-sonnet-5-5': sonnet }
+    expect(priceFor(prices, 'azure_ai/claude-opus-5-5')).toEqual(opus)
+    expect(priceFor(prices, 'claude-opus-5-5[1m]')).toEqual(opus)
+    expect(priceFor(prices, 'sonnet')).toEqual(sonnet)
+    expect(priceFor(prices, 'gpt-4o')).toBeUndefined()
+  })
+
+  test('session tips: expired cache, fat context, big outputs, rereads, subagents', async () => {
+    expect(cacheExpiryWarning(4 * 60_000, 300_000, opus)).toBeUndefined() // still warm
+    expect(cacheExpiryWarning(8 * 60_000, 20_000, opus)).toBeUndefined() // small context
+    expect(cacheExpiryWarning(8 * 60_000, 300_000, opus)).toContain('300k tokent ír újra ≈ $1.50')
+    expect(contextGrowthTip(200_000, opus)).toBeUndefined()
+    expect(contextGrowthTip(400_000, opus)).toContain('≥ $0.08')
+    expect(toolOutputTip('Bash', 'npm test', 40_000)).toBeUndefined()
+    expect(toolOutputTip('Bash', 'npm test', 160_000)).toContain('~40k token')
+    expect(repeatReadTip('/a/b/register.tsx', 3)).toBeUndefined()
+    expect(repeatReadTip('/a/b/register.tsx', 4)).toContain('register.tsx-t már 4×')
+    expect(subagentTip(2_000_000, 500_000)).toBeUndefined()
+    expect(subagentTip(1_000_000, 1_500_000)).toContain('60%')
+  })
+
+  test('forecast and its tip', async () => {
+    expect(forecast(100, '2026-10-11')).toBe((100 / 10.5) * 31)
+    expect(forecastTip(10, '2026-10-02', 800)).toBeUndefined() // too early to tell
+    expect(forecastTip(600, '2026-10-15', 800)).toContain('keret $800')
+    expect(forecastTip(600, '2026-10-15', 800)).toContain('/nap')
+    expect(forecastTip(100, '2026-10-15', 800)).toContain('📊')
+    expect(forecastTip(900, '2026-10-15', 800)).toContain('már elfogyott')
+  })
+
+  test('output share, failures and the dear weekday rest on LiteLLM numbers', async () => {
+    const heavy: Day = {
+      date: '2026-10-14',
+      metrics: metrics(10),
+      models: { 'azure_ai/claude-opus-5-5': metrics(10, { completionTokens: 250_000 }) },
+    }
+    const prices = (m: string) => priceFor({ 'claude-opus-5-5': opus }, m)
+    expect(outputTip(heavy, prices)).toContain('50%')
+    expect(failedTip({ ...heavy, metrics: metrics(10, { failed: 1, requests: 100 }) })).toBeUndefined()
+    expect(failedTip({ ...heavy, metrics: metrics(10, { failed: 6, requests: 100 }) })).toContain('6 kérés')
+
+    const days: Day[] = []
+    for (let i = 0; i < 28; i++) {
+      const date = new Date(Date.UTC(2026, 8, 14 + i)).toISOString().slice(0, 10) // starts on a Monday
+      const tuesday = new Date(`${date}T00:00:00Z`).getUTCDay() === 2
+      days.push({ date, metrics: metrics(tuesday ? 90 : 20), models: {} })
+    }
+    expect(weekdayTip(days)).toContain('keddi')
+    expect(weekdayTip(days.slice(0, 9))).toBeUndefined() // not enough history
+  })
+
+  test('compact effect needs three turns on each side', async () => {
+    expect(compactEffectTip([100, 100, 100], [60, 60])).toBeUndefined()
+    expect(compactEffectTip([100, 100, 100], [60, 60, 60])).toContain('40%')
+    expect(compactEffectTip([100, 100, 100], [95, 95, 95])).toBeUndefined()
+  })
+
+  test('quests: one a day, deterministic, and they pay only within budget', async () => {
+    expect(questFor('2026-10-15').id).toBe(questFor('2026-10-15').id)
+    expect(new Set(Array.from({ length: 30 }, (_, i) => questFor(`2026-10-${String(i + 1).padStart(2, '0')}`).id)).size).toBeGreaterThan(2)
+
+    const cheap = QUESTS.find(q => q.id === 'fel')!
+    const date = ['2026-10-10', '2026-10-11', '2026-10-12', '2026-10-13', '2026-10-14'].find(d => questFor(d).id === 'fel')
+    if (date) {
+      const ledger = newLedger('2026-10-15', 0)
+      const day = { date, metrics: metrics(5), models: {} } as Day
+      expect(cheap.done(day, 25)).toBe(true)
+      const result = credit(ledger, [day], '2026-10-15', 25)
+      expect(result.quests).toEqual([date])
+      expect(result.ledger.quests[date]).toBe(5)
+    }
+  })
+
+  test('tips speak in the pack voice', async () => {
+    expect(voice('📈 Ezzel a tempóval sok lesz.', packById('paraszt'), 2)).toBe('📈 Ezzel a tempóval sok lesz.')
+    expect(voice('📈 Ezzel a tempóval sok lesz.', packById('nagymama'), 0)).toBe('📈 Kisfiam, ezzel a tempóval sok lesz.')
+    expect(voice('📦 A Bash kimenete nagy.', packById('nav'), 0)).toBe('📦 Hatósági javaslat: a Bash kimenete nagy.')
+    expect(voice('🧠 Opus túl sok.', packById('nav'), 0)).toBe('🧠 Hatósági javaslat: Opus túl sok.')
   })
 })

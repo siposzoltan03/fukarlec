@@ -50,6 +50,22 @@ A prompt cache az utolsó kör után 5 percig meleg (egy óráig, ha `promptCach
   `/fukarlec tippek`-ben is látszik.
 - `/reload-plugins` után is tovább számol: az utolsó kör ideje sessionönként megmarad.
 
+### Session-költés
+A session-érték a session saját köreiből számolódik, nem a kulcs teljes költéséből:
+
+- **Mit számol:** minden kör (a fő szál és a subagentek) tokenjeit: input, output, cache-olvasás és cache-írás, a proxy
+  `/model/info` áraival. Opus 5.5-nél például $4 / $20 / $0.20 / $5 per millió token.
+- **1 órás cache** (`promptCacheTtl: "1h"`): a cache-írás drágább, 2× input az 5 perces cache 1,25×-e helyett. Ezt is így számolja.
+- **Mikor frissül:** minden kör végén azonnal; nem kell megvárni a LiteLLM kötegelt könyvelését.
+- **Megmarad:** sessionönként elmentődik, így `/reload-plugins` után sem nullázódik.
+- **Ha az árak még nincsenek meg:** a kör költése sorba áll, és amint az árak betöltődtek, beszámolódik.
+- **Drága kör:** ha egy kör (a közben futó subagentekkel együtt) eléri az `expensiveTurn` küszöböt, a kör végén azonnal szól.
+- **Párhuzamos használat:** a kulcs költésének változását a session alatt ellenőrzésnek megtartja. Ha legalább $1, és több,
+  mint a session saját költésének 1,3-szorosa + $0.50, a riport és a `/fukarlec tippek` jelzi, hogy valószínűleg más session
+  vagy az opencode is használja a kulcsot.
+- **Ami nincs benne:** a köreken kívüli apró háttérhívások (például a session-cím generálása). A session-érték ezért kicsit
+  alulbecsülhet; a mérvadó, számlázott összeg a napi és havi érték, ami a LiteLLM-ből jön.
+
 ### Spórolási tippek
 Max. 30 percenként egy, a valós mai számokból: Opus-túlsúly, alacsony cache-találat, újraírt cache modellváltás vagy hosszú szünet után.
 

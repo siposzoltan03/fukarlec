@@ -46,6 +46,9 @@ folytatás/compact/clear tanács ezt azonnal jelzi.
 
 - **Status line:** `… · ⏳ cache 3:42`, az utolsó percben `⌛ cache 0:42!`, utána `❄️ cache lejárt`. Kör közben nem számol,
   mert a cache akkor frissül.
+- **Panel – modell és context:** a session modellje a millió tokenenkénti áraival, és hogy mennyire telt meg a
+  context ablak (`Context: 182k / 1M ▰▰▱▱▱▱▱▱▱▱ 18%`, 80%-tól pirosan), azzal együtt, hogy minden kör legalább mennyiért
+  olvassa.
 - **Panel:** a „Cache: X% hit” sor alatt `⏳ Cache: 3:42 ▰▰▰▰▰▰▰▱▱▱`, az utolsó percben pirosan.
 - **~30 mp-cel lejárat előtt** (50k token feletti contextnél): toast az újraírás árával, és azzal, mennyibe kerülne most
   a `/compact`, amíg a cache meleg. Ha az újraírás legalább $0.50, natív értesítés is jön.

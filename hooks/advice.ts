@@ -76,6 +76,28 @@ export function restartCosts(
   return { keep, compact, clear, best: compact < keep * 0.9 ? 'compact' : 'keep' }
 }
 
+// --- the dashboard's model and context lines ---------------------------------------
+
+/** `182k`, `1M`, `1.5M`. */
+export function tokenCount(tokens: number): string {
+  return tokens >= 1_000_000 ? `${+(tokens / 1_000_000).toFixed(1)}M` : `${Math.round(tokens / 1000)}k`
+}
+
+/** The session's model with its prices per million tokens. */
+export function modelLine(model: string, price: Prices | undefined): string {
+  const name = model.replace(/^.*\//, '') || 'ismeretlen'
+  if (!price) return `Modell: ${name}`
+  const m = (perToken: number) => money(perToken * 1e6)
+  return `Modell: ${name} · ${m(price.input)} be · ${m(price.output)} ki · ${m(price.cacheRead)} cache-olvasás /MTok`
+}
+
+/** How full the context window is, and what reading it costs every turn at the least. */
+export function contextLine(tokens: number, window: number, price: Prices | undefined, bar = ''): string {
+  const percent = window > 0 ? Math.round((tokens / window) * 100) : 0
+  const read = price && tokens > 0 ? ` · minden kör legalább ${money(tokens * price.cacheRead)}-ért olvassa` : ''
+  return `Context: ${tokenCount(tokens)} / ${tokenCount(window)}${bar ? ` ${bar}` : ''} ${percent}%${read}`
+}
+
 // --- /fukarlec újrakezd: a small model's handover, then a fresh session ---------------
 
 /** Tokens the small model's handover comes to, roughly. */

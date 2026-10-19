@@ -37,6 +37,9 @@ import {
   pickSummaryModel,
   restartViaSummaryCost,
   restartWorthIt,
+  contextLine,
+  modelLine,
+  tokenCount,
 } from '../hooks/advice'
 
 const NOW = Date.parse('2026-10-13T12:00:00Z')
@@ -511,6 +514,26 @@ describe('újrakezdés egy kis modell átadásából', () => {
     expect(cacheExpiryWarning(8 * 60_000, 300_000, opus, 5 * 60_000, { cost: restart, baseTokens: 30_000 })).toContain(
       'Előtte /compact vagy /fukarlec újrakezd (~$0.33)?',
     )
+  })
+})
+
+describe('a dashboard modell- és context-sora', () => {
+  const opus = { input: 4e-6, output: 2e-5, cacheRead: 2e-7, cacheWrite: 5e-6 }
+
+  test('token counts read like the status line', () => {
+    expect(tokenCount(182_400)).toBe('182k')
+    expect(tokenCount(1_000_000)).toBe('1M')
+    expect(tokenCount(1_500_000)).toBe('1.5M')
+  })
+
+  test('the model with its prices per million tokens', () => {
+    expect(modelLine('azure_ai/claude-opus-5-5', opus)).toBe('Modell: claude-opus-5-5 · $4.00 be · $20.00 ki · $0.20 cache-olvasás /MTok')
+    expect(modelLine('claude-opus-5-5', undefined)).toBe('Modell: claude-opus-5-5')
+  })
+
+  test('how full the window is and what a turn pays to read it', () => {
+    expect(contextLine(182_000, 1_000_000, opus, '▰▰▱')).toBe('Context: 182k / 1M ▰▰▱ 18% · minden kör legalább $0.04-ért olvassa')
+    expect(contextLine(0, 200_000, undefined)).toBe('Context: 0k / 200k 0%')
   })
 })
 

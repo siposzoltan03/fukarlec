@@ -13,6 +13,9 @@ import {
   cacheWarmSince,
   clearOrRewriteTip,
   clock,
+  contextLine,
+  modelLine,
+  restartWorthIt,
   CONDENSE_RATIO,
   condenseTranscript,
   HANDOVER_SYSTEM,
@@ -905,6 +908,13 @@ export const register: Register = (on, options) => {
       cacheLeft !== undefined && cacheLeft <= 0 && lastPrice && lastContextTokens >= 50_000
         ? restartCosts(lastContextTokens, baseContextTokens, lastPrice, false)
         : undefined
+    const restartCost = restart ? estimateRestart(lastContextTokens, lastModel) : undefined
+    const showRestart = restart !== undefined && restartCost !== undefined && restartWorthIt(restartCost, restart)
+    const usage = await $.session.usage().catch(() => undefined)
+    const sessionModel = await $.session.model().catch(() => lastModel)
+    const contextTokens = usage?.context.tokens ?? lastContextTokens
+    const contextWindow = usage?.context.window ?? 0
+    const contextFull = contextWindow > 0 && contextTokens / contextWindow >= 0.8
     const advice = await read($, adviceAtom)
     const { Box, Text, Raster } = $.ui.resolve(e)
     const paneCols = e.props.bodyColumns ?? 40
@@ -1016,6 +1026,12 @@ export const register: Register = (on, options) => {
         })}
 
         <Text> </Text>
+        <Text dimColor>{modelLine(sessionModel, priceOf(sessionModel))}</Text>
+        {contextWindow > 0 && (
+          <Text color={contextFull ? '#ef4444' : undefined} dimColor={!contextFull}>
+            {contextLine(contextTokens, contextWindow, priceOf(sessionModel), progressBar(contextTokens / contextWindow, 10))}
+          </Text>
+        )}
         <Text dimColor>Cache: {cacheHit}% hit, {money(activity.total.cacheSaved)} megtakarítás</Text>
         {cacheWarmSinceAt === 0 && !isTurnRunning && <Text dimColor>⏳ Cache: az első kör végén indul</Text>}
         {isTurnRunning && <Text dimColor>⏳ Cache: friss (fut a kör)</Text>}
@@ -1028,8 +1044,10 @@ export const register: Register = (on, options) => {
         )}
         {restart && (
           <Text dimColor>
-            {'   '}következő 10 kör: folytatás ~{money(restart.keep)} · /compact ~{money(restart.compact)} · /clear ~
-            {money(restart.clear)} → {restart.best === 'compact' ? '/compact' : 'folytasd'} (új feladatnál /clear)
+            {'   '}következő 10 kör: folytatás ~{money(restart.keep)} · /compact ~{money(restart.compact)} ·{' '}
+            {showRestart && restartCost !== undefined ? `/fukarlec újrakezd ~${money(restartCost)} · ` : ''}/clear ~
+            {money(restart.clear)} → {showRestart ? '/fukarlec újrakezd' : restart.best === 'compact' ? '/compact' : 'folytasd'}{' '}
+            (új feladatnál /clear)
           </Text>
         )}
         <Text dimColor>Összesen: {money(totalSpend)} · {activity.total.requests} kérés</Text>

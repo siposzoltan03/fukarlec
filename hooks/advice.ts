@@ -16,6 +16,15 @@ export function cacheTtlMs(setting: unknown): number {
   return setting === '1h' ? 60 * 60_000 : CACHE_TTL_MS
 }
 
+/**
+ * When the cache's lifetime started: each request that reads or writes the cache restarts it at the
+ * request's start, so that is the turn's last main-thread request, not the turn's end. Falls back to
+ * the turn's end when no request start was seen within the turn.
+ */
+export function cacheWarmSince(lastRequestStartAt: number, turnEndAt: number): number {
+  return lastRequestStartAt > 0 && lastRequestStartAt <= turnEndAt ? lastRequestStartAt : turnEndAt
+}
+
 /** `3:42`, or `0:07`. */
 export function clock(ms: number): string {
   const total = Math.max(0, Math.ceil(ms / 1000))

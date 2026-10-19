@@ -14,6 +14,7 @@ import {
   cacheSoonWarning,
   cacheStatus,
   cacheTtlMs,
+  cacheWarmSince,
   clearOrRewriteTip,
   clock,
   parallelUseTip,
@@ -347,6 +348,16 @@ describe('advice', () => {
     expect(repeatReadTip('/a/b/register.tsx', 4)).toContain('register.tsx-t már 4×')
     expect(subagentTip(2_000_000, 500_000)).toBeUndefined()
     expect(subagentTip(1_000_000, 1_500_000)).toContain('60%')
+  })
+
+  test('cache countdown starts at the last request of the turn, not at its end', () => {
+    // The final answer's request started at 100 s and the turn ended at 160 s: the cache has been
+    // ageing since 100 s, so 5 minutes later it is gone, 60 s before "turn end + 5 min".
+    expect(cacheWarmSince(100_000, 160_000)).toBe(100_000)
+    // No request start seen: fall back to the turn's end.
+    expect(cacheWarmSince(0, 160_000)).toBe(160_000)
+    // A request start after the turn's end is not this turn's: fall back too.
+    expect(cacheWarmSince(170_000, 160_000)).toBe(160_000)
   })
 
   test('cache countdown: TTL, clock, status, the warning 30 s before', async () => {

@@ -37,8 +37,10 @@ Havi riport napi oszlopokkal, modellenkénti bontással ($/MTok), cache-találat
 amíg `/fukarlec engedd` fel nem oldja aznapra.
 
 ### Cache-visszaszámláló
-A prompt cache az utolsó kör után 5 percig meleg (egy óráig, ha `promptCacheTtl: "1h"` vagy
-`CLAUDE_CODE_PROMPT_CACHE_TTL=1h` van beállítva). Utána a következő kör a teljes contextet újraírja, cache-írási áron.
+A prompt cache 5 percig meleg (egy óráig, ha `promptCacheTtl: "1h"` vagy `CLAUDE_CODE_PROMPT_CACHE_TTL=1h` van beállítva),
+a kör utolsó modellkérésének kezdetétől számítva, nem a kör végétől: minden kérés az indulásakor indítja újra a cache
+élettartamát, így egy hosszú záró válasz ebből fogy. A visszaszámlálás is innen indul. Utána a következő kör a teljes
+contextet újraírja, cache-írási áron.
 
 - **Status line:** `… · ⏳ cache 3:42`, az utolsó percben `⌛ cache 0:42!`, utána `❄️ cache lejárt`. Kör közben nem számol,
   mert a cache akkor frissül.

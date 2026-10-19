@@ -9,6 +9,7 @@ import {
   cacheSoonWarning,
   cacheStatus,
   cacheTtlMs,
+  cacheCountdownDone,
   cacheWarmSince,
   clearOrRewriteTip,
   clock,
@@ -190,7 +191,7 @@ export const register: Register = (on, options) => {
     nowMs = await $io.now()
     if (cacheWarmSinceAt === 0 || isTurnRunning) return
     const remaining = cacheWarmSinceAt + cacheTtl - nowMs
-    if (remaining < -2_000) return // already shows expired
+    if (cacheCountdownDone(remaining, expiredToldFor === cacheWarmSinceAt)) return // already shows expired
     showStatus($io)
     if (remaining <= 0 && expiredToldFor !== cacheWarmSinceAt) {
       expiredToldFor = cacheWarmSinceAt

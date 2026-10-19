@@ -41,6 +41,8 @@ A prompt cache 5 percig meleg (egy óráig, ha `promptCacheTtl: "1h"` vagy `CLAU
 a kör utolsó modellkérésének kezdetétől számítva, nem a kör végétől: minden kérés az indulásakor indítja újra a cache
 élettartamát, így egy hosszú záró válasz ebből fogy. A visszaszámlálás is innen indul. Utána a következő kör a teljes
 contextet újraírja, cache-írási áron.
+Ha a záró válasz maga tovább tartott a cache élettartamánál, a kör már lejárt cache-sel ér véget, és a status line meg a
+folytatás/compact/clear tanács ezt azonnal jelzi.
 
 - **Status line:** `… · ⏳ cache 3:42`, az utolsó percben `⌛ cache 0:42!`, utána `❄️ cache lejárt`. Kör közben nem számol,
   mert a cache akkor frissül.

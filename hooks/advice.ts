@@ -25,6 +25,14 @@ export function cacheWarmSince(lastRequestStartAt: number, turnEndAt: number): n
   return lastRequestStartAt > 0 && lastRequestStartAt <= turnEndAt ? lastRequestStartAt : turnEndAt
 }
 
+/**
+ * Whether the countdown has nothing left to do: the cache expired a while ago and that was already
+ * said. A turn whose final answer outlasted the cache ends already expired, and still gets its say.
+ */
+export function cacheCountdownDone(remainingMs: number, expiryTold: boolean): boolean {
+  return remainingMs < -2_000 && expiryTold
+}
+
 /** `3:42`, or `0:07`. */
 export function clock(ms: number): string {
   const total = Math.max(0, Math.ceil(ms / 1000))

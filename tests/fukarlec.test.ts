@@ -14,6 +14,7 @@ import {
   cacheSoonWarning,
   cacheStatus,
   cacheTtlMs,
+  cacheCountdownDone,
   cacheWarmSince,
   clearOrRewriteTip,
   clock,
@@ -358,6 +359,15 @@ describe('advice', () => {
     expect(cacheWarmSince(0, 160_000)).toBe(160_000)
     // A request start after the turn's end is not this turn's: fall back too.
     expect(cacheWarmSince(170_000, 160_000)).toBe(160_000)
+  })
+
+  test('a turn whose answer outlasted the cache still reports the expiry once', () => {
+    // Ended 40 s after the cache expired, nothing said yet: keep going and say it.
+    expect(cacheCountdownDone(-40_000, false)).toBe(false)
+    // Said already: nothing more to do.
+    expect(cacheCountdownDone(-40_000, true)).toBe(true)
+    // Just expired: still within the grace window either way.
+    expect(cacheCountdownDone(-1_000, true)).toBe(false)
   })
 
   test('cache countdown: TTL, clock, status, the warning 30 s before', async () => {

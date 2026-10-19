@@ -514,6 +514,7 @@ export const register: Register = (on, options) => {
       name: 'fukarlec',
       description: 'LiteLLM költségriport: /fukarlec [hó | <N> | frissít | engedd | panel | xp | bolt | vesz <tétel>]',
     })
+    await $.ui.open({ id: PANE_ID, title: '🪙 Fukarléc' }).catch(() => {})
     conn = makeConn({
       baseUrl: await $.env.get('ANTHROPIC_BASE_URL'),
       authToken: await $.env.get('ANTHROPIC_AUTH_TOKEN'),

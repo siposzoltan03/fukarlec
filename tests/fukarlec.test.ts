@@ -40,6 +40,9 @@ import {
   contextLine,
   modelLine,
   tokenCount,
+  canonicalArgs,
+  handoverMarkdown,
+  handoverTitle,
 } from '../hooks/advice'
 
 const NOW = Date.parse('2026-10-13T12:00:00Z')
@@ -210,7 +213,7 @@ describe('in a session', () => {
     expect(statuses.at(-1)).toContain('session $0.09/$20.00') // the session's own spend did not move
   })
 
-  test('block mode drops prompts over budget until /fukarlec engedd', { options: { overBudget: 'block', dailyBudget: 10 } }, async ($, on) => {
+  test('block mode drops prompts over budget until /fukarlec allow', { options: { overBudget: 'block', dailyBudget: 10 } }, async ($, on) => {
     const { toasts } = world(on)
     proxy(on, () => 5, [{ date: '2026-10-13', spend: 12 }])
     await $.session.start({ cwd: '/tmp', surface: 'terminal', isInteractive: true })
@@ -313,7 +316,7 @@ describe('XP', () => {
     expect('error' in again && again.error).toContain('már a tiéd') // no second charge
 
     const unowned = wear(bought.ledger, matyo)
-    expect('error' in unowned && unowned.error).toContain('/fukarlec vesz matyo') // wearing never buys
+    expect('error' in unowned && unowned.error).toContain('/fukarlec buy matyo') // wearing never buys
 
     const paraszt: ShopItem = { kind: 'skin', id: 'paraszt', name: 'Paraszt bácsi', description: '', price: 0 }
     const back = wear(bought.ledger, paraszt)
@@ -509,10 +512,10 @@ describe('újrakezdés egy kis modell átadásából', () => {
     expect(restartWorthIt(restart, restartCosts(300_000, 30_000, opus, false))).toBe(true)
     expect(restartWorthIt(restart, restartCosts(60_000, 30_000, opus, false))).toBe(false)
     const tip = clearOrRewriteTip(300_000, 30_000, opus, restart)
-    expect(tip).toContain('/fukarlec újrakezd ~$0.33')
-    expect(tip).toContain('Ugyanazon a feladaton: /fukarlec újrakezd')
+    expect(tip).toContain('/fukarlec restart ~$0.33')
+    expect(tip).toContain('Ugyanazon a feladaton: /fukarlec restart')
     expect(cacheExpiryWarning(8 * 60_000, 300_000, opus, 5 * 60_000, { cost: restart, baseTokens: 30_000 })).toContain(
-      'Előtte /compact vagy /fukarlec újrakezd (~$0.33)?',
+      'Előtte /compact vagy /fukarlec restart (~$0.33)?',
     )
   })
 })
@@ -537,3 +540,27 @@ describe('a dashboard modell- és context-sora', () => {
   })
 })
 
+describe('saved handovers', () => {
+  const text = '## Goal\n- Make vendor publish retries idempotent per vendor id\n\n## Next steps\n1. Add the test'
+
+  test('a handover file says when, by whom and where', () => {
+    const md = handoverMarkdown({ id: 'mgx3k2a1', at: Date.UTC(2026, 9, 19, 15, 40), model: 'claude-haiku-4-5', cwd: '/repo', text })
+    expect(md.startsWith('# Handover mgx3k2a1\n\n- Written: 2026-10-19 15:40 UTC\n- By: claude-haiku-4-5\n- Project: /repo')).toBe(true)
+    expect(md).toContain('## Goal')
+  })
+
+  test('its one-line title comes from the Goal section', () => {
+    expect(handoverTitle(text)).toBe('Make vendor publish retries idempotent per vendor id')
+    expect(handoverTitle('## Cél\n**Az árazás javítása**')).toBe('Az árazás javítása')
+    expect(handoverTitle('Just one line')).toBe('Just one line')
+    expect(handoverTitle('x'.repeat(200)).length).toBe(80)
+  })
+
+  test('the old Hungarian subcommands still work', () => {
+    expect(canonicalArgs('Újrakezd sonnet')).toBe('restart sonnet')
+    expect(canonicalArgs('vesz matyo')).toBe('buy matyo')
+    expect(canonicalArgs('engedd')).toBe('allow')
+    expect(canonicalArgs(' tips ')).toBe('tips')
+    expect(canonicalArgs('7')).toBe('7')
+  })
+})

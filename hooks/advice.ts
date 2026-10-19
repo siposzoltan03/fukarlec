@@ -76,6 +76,30 @@ export function restartCosts(
   return { keep, compact, clear, best: compact < keep * 0.9 ? 'compact' : 'keep' }
 }
 
+// --- subcommands ---------------------------------------------------------------------
+
+/** The Hungarian subcommand names of earlier versions, still accepted. */
+const HUNGARIAN_VERBS: Readonly<Record<string, string>> = {
+  frissít: 'refresh',
+  frissit: 'refresh',
+  engedd: 'allow',
+  tippek: 'tips',
+  tipp: 'tips',
+  bolt: 'shop',
+  vesz: 'buy',
+  újrakezd: 'restart',
+  ujrakezd: 'restart',
+  átadások: 'handovers',
+  atadasok: 'handovers',
+  folytat: 'resume',
+}
+
+/** `/fukarlec` arguments with the first word in English: `vesz matyo` → `buy matyo`. */
+export function canonicalArgs(args: string): string {
+  const [verb = '', ...rest] = args.trim().toLowerCase().split(/\s+/)
+  return [HUNGARIAN_VERBS[verb] ?? verb, ...rest].join(' ').trim()
+}
+
 // --- the dashboard's model and context lines ---------------------------------------
 
 /** `182k`, `1M`, `1.5M`. */
@@ -98,7 +122,7 @@ export function contextLine(tokens: number, window: number, price: Prices | unde
   return `Context: ${tokenCount(tokens)} / ${tokenCount(window)}${bar ? ` ${bar}` : ''} ${percent}%${read}`
 }
 
-// --- /fukarlec újrakezd: a small model's handover, then a fresh session ---------------
+// --- /fukarlec restart: a small model's handover, then a fresh session ---------------
 
 /** Tokens the small model's handover comes to, roughly. */
 export const HANDOVER_TOKENS = 2_000
@@ -159,7 +183,7 @@ export function pickSummaryModel(
 }
 
 /**
- * What the next `turns` turns cost after `/fukarlec újrakezd`: the small model reads the condensed
+ * What the next `turns` turns cost after `/fukarlec restart`: the small model reads the condensed
  * transcript once (no cache) and writes the handover; the fresh session then starts from the
  * base plus the handover, written once and read on every later turn.
  */
@@ -177,6 +201,26 @@ export function restartViaSummaryCost(
 /** Worth suggesting only when it clearly beats both keeping the context and /compact. */
 export function restartWorthIt(restart: number, c: RestartCosts): boolean {
   return restart < c.keep * 0.8 && restart < c.compact * 0.9
+}
+
+/** Where handovers are saved as Markdown, under the home directory. */
+export const HANDOVER_DIR = '.claude/handovers'
+
+export type Handover = { id: string; at: number; model: string; cwd: string; text: string; path?: string }
+
+/** A handover as a Markdown file a person can open and a later session can continue from. */
+export function handoverMarkdown(h: Handover): string {
+  const when = new Date(h.at).toISOString().replace('T', ' ').slice(0, 16)
+  return `# Handover ${h.id}\n\n- Written: ${when} UTC\n- By: ${h.model}\n- Project: ${h.cwd || 'unknown'}\n\n${h.text.trim()}\n`
+}
+
+/** What a handover is about in one line: its Goal section's first line, else its first line of text. */
+export function handoverTitle(text: string): string {
+  const lines = text.split('\n').map(l => l.trim())
+  const goal = lines.findIndex(l => /^#+\s*(goal|cél)\b/i.test(l))
+  const first = (goal >= 0 ? lines.slice(goal + 1) : lines).find(l => l && !l.startsWith('#')) ?? ''
+  const line = first.replace(/\*\*/g, '').replace(/^[-*]\s+/, '')
+  return line.length > 80 ? `${line.slice(0, 79)}…` : line
 }
 
 export const HANDOVER_SYSTEM =
@@ -200,7 +244,7 @@ export function resumePrompt(id: string, handover: string): string {
   )
 }
 
-/** Once the cache has expired: keep going, /compact, /fukarlec újrakezd or /clear, priced for the next turns. */
+/** Once the cache has expired: keep going, /compact, /fukarlec restart or /clear, priced for the next turns. */
 export function clearOrRewriteTip(
   contextTokens: number,
   baseTokens: number,
@@ -210,11 +254,11 @@ export function clearOrRewriteTip(
   if (!price || contextTokens < 50_000) return undefined
   const c = restartCosts(contextTokens, baseTokens, price, false)
   const showRestart = restart !== undefined && restartWorthIt(restart, c)
-  const same = showRestart ? '/fukarlec újrakezd' : c.best === 'compact' ? '/compact' : 'folytasd nyugodtan'
+  const same = showRestart ? '/fukarlec restart' : c.best === 'compact' ? '/compact' : 'folytasd nyugodtan'
   return (
     `🤔 Lejárt a cache (${k(contextTokens)} context). A következő ${RESTART_TURNS} kör ára: ` +
     `folytatás ~${money(c.keep)} · /compact ~${money(c.compact)} · ` +
-    (showRestart ? `/fukarlec újrakezd ~${money(restart)} · ` : '') +
+    (showRestart ? `/fukarlec restart ~${money(restart)} · ` : '') +
     `/clear ~${money(c.clear)}. Ugyanazon a feladaton: ${same}; új feladatnál: /clear.`
   )
 }
@@ -239,7 +283,7 @@ export function cacheExpiryWarning(
   const cost = price ? ` ≈ ${money(contextTokens * price.cacheWrite)}` : ''
   const offerRestart =
     price && restart && restartWorthIt(restart.cost, restartCosts(contextTokens, restart.baseTokens, price, false))
-  const first = offerRestart ? `Előtte /compact vagy /fukarlec újrakezd (~${money(restart.cost)})?` : 'Előtte /compact?'
+  const first = offerRestart ? `Előtte /compact vagy /fukarlec restart (~${money(restart.cost)})?` : 'Előtte /compact?'
   return `⏳ ${minutes} perc szünet: a cache lejárt, ez a kör ${k(contextTokens)} tokent ír újra${cost}. ${first}`
 }
 

@@ -12,14 +12,14 @@ máshol némán nem csinál semmit.
 Session/napi/havi költés, 5 percenként és minden kör után frissül.
 A session költése a session saját köreinek (subagentekkel együtt) tokenjei, a proxy `/model/info` áraival beárazva, így más
 sessionök vagy az opencode ugyanazon a kulcson nem keverednek bele. A napi és havi érték a LiteLLM valódi, számlázott összege.
-Ha a kulcs a session alatt jóval többet költ, mint maga a session, a riport és a `/fukarlec tippek` jelzi, hogy valószínűleg
+Ha a kulcs a session alatt jóval többet költ, mint maga a session, a riport és a `/fukarlec tips` jelzi, hogy valószínűleg
 párhuzamos használat van.
 
 ### `/fukarlec` riport
 ![Riport](docs/report.png)
 
 Havi riport napi oszlopokkal, modellenkénti bontással ($/MTok), cache-találati aránnyal és -megtakarítással.
-`/fukarlec 7`: utolsó 7 nap · `/fukarlec frissít` · `/fukarlec help`
+`/fukarlec 7`: utolsó 7 nap · `/fukarlec refresh` · `/fukarlec help`
 
 ### Dashboard panel
 ![Panel](docs/panel.png)
@@ -34,7 +34,7 @@ Havi riport napi oszlopokkal, modellenkénti bontással ($/MTok), cache-találat
 
 ### Budget-őr
 80%-nál és 100%-nál toast (100%-nál natív értesítés is). `block` módban keret felett nem enged új promptot,
-amíg `/fukarlec engedd` fel nem oldja aznapra.
+amíg `/fukarlec allow` fel nem oldja aznapra.
 
 ### Cache-visszaszámláló
 A prompt cache 5 percig meleg (egy óráig, ha `promptCacheTtl: "1h"` vagy `CLAUDE_CODE_PROMPT_CACHE_TTL=1h` van beállítva),
@@ -54,20 +54,30 @@ folytatás/compact/clear tanács ezt azonnal jelzi.
   a `/compact`, amíg a cache meleg. Ha az újraírás legalább $0.50, natív értesítés is jön.
 - **Lejáratkor:** a következő 10 kör ára háromféleképp (folytatás, `/compact`, `/clear`) a proxy valós áraiból, ajánlással:
   ugyanazon a feladaton folytasd vagy compactolj, új feladatnál `/clear`. Amíg a cache lejárt, ez a panelen és a
-  `/fukarlec tippek`-ben is látszik.
+  `/fukarlec tips`-ben is látszik.
 - `/reload-plugins` után is tovább számol: az utolsó kör ideje sessionönként megmarad.
 
 ### Újrakezdés átadásból
 Ha a cache már lejárt, egy nagy beszélgetés folytatása a fő modelleden az egészet újraírja, és a `/compact` is. A
-`/fukarlec újrakezd` ugyanezt egy kis modellel végzi:
+`/fukarlec restart` ugyanezt egy kis modellel végzi:
 
 1. beolvassa a beszélgetést: minden elhangzott szót megtart, a hosszú tool-kimeneteknek csak az elejét és a végét;
 2. a proxy legolcsóbb Haikuja (ha abba nem fér bele, Sonnetje) átadást ír: cél, jelenlegi állapot, döntések, zsákutcák,
    nyitott kérdések, következő lépések, fájlok;
 3. lefuttatja a `/clear`-t, és az átadásból folytatja, immár kicsi beszélgetésben.
 
-A `/fukarlec újrakezd sonnet` Sonnetet használ, ha a session sok kényes döntést tartalmazott. Minden átadás azonosítóval
-megmarad (`handover:<id>` a plugin tárolójában), így semmi nem vész el, ha az újrakezdés félúton megáll.
+A `/fukarlec restart sonnet` Sonnetet használ, ha a session sok kényes döntést tartalmazott.
+
+Minden átadás Markdownként is elmentődik: `~/.claude/handovers/<id>.md` (időpont, modell, projektmappa és a szöveg),
+így semmi nem vész el, ha az újrakezdés félúton megáll, és később is folytatható:
+
+- `/fukarlec handovers` listázza a legutóbbiakat, a `/fukarlec handovers <id>` megnyit egyet;
+- `/fukarlec resume <id>` az aktuális sessionben folytat belőle, például másnap egy új sessionben.
+
+Amíg a teambrain nem elérhető, ezek a helyi fájlok az átadások otthona; ha elérhető lesz, oda is mehetnek.
+
+A parancsok angolul vannak (`refresh`, `allow`, `tips`, `restart`, `handovers`, `resume`, `shop`, `buy`); a korábbi
+magyar nevek (`frissít`, `engedd`, `tippek`, `újrakezd`, `bolt`, `vesz`) továbbra is működnek.
 
 Csak javasolja, magától sosem csinálja: ha a cache lejárt, a context legalább 50k token, és az újrakezdés a következő 10
 körre egyértelműen olcsóbb a folytatásnál és a `/compact`-nál is. Ilyenkor a folytatás/compact/újrakezdés/clear
@@ -85,7 +95,7 @@ A session-érték a session saját köreiből számolódik, nem a kulcs teljes k
 - **Ha az árak még nincsenek meg:** a kör költése sorba áll, és amint az árak betöltődtek, beszámolódik.
 - **Drága kör:** ha egy kör (a közben futó subagentekkel együtt) eléri az `expensiveTurn` küszöböt, a kör végén azonnal szól.
 - **Párhuzamos használat:** a kulcs költésének változását a session alatt ellenőrzésnek megtartja. Ha legalább $1, és több,
-  mint a session saját költésének 1,3-szorosa + $0.50, a riport és a `/fukarlec tippek` jelzi, hogy valószínűleg más session
+  mint a session saját költésének 1,3-szorosa + $0.50, a riport és a `/fukarlec tips` jelzi, hogy valószínűleg más session
   vagy az opencode is használja a kulcsot.
 - **Ami nincs benne:** a köreken kívüli apró háttérhívások (például a session-cím generálása). A session-érték ezért kicsit
   alulbecsülhet; a mérvadó, számlázott összeg a napi és havi érték, ami a LiteLLM-ből jön.
@@ -102,7 +112,7 @@ A napok UTC szerint értendők, ahogy a LiteLLM számol.
 ## Spórolási tippek
 
 A tippek toastként jönnek (a sima tippek legfeljebb 30 percenként egy, a sürgősek azonnal, de mindegyik csak egyszer),
-a panel Tipp blokkjában, és mind egyben: `/fukarlec tippek`. A felvett üzenet-pack hangján szólnak.
+a panel Tipp blokkjában, és mind egyben: `/fukarlec tips`. A felvett üzenet-pack hangján szólnak.
 
 - **Session közben:** ⏳ lejárt cache (5+ perc szünet után a következő kör újraírja a contextet – még küldés előtt szól,
   becsült összeggel), 🐘 hízó context, 📦 óriási Bash/Read kimenet, 🔁 ugyanaz a fájl sokszor beolvasva,
@@ -130,7 +140,7 @@ A garast Fukar bácsi boltjában költöd el:
 | Juhász | 200 | | Betyár | 90 |
 | Matyó legény | 300 | | NAV-ellenőr | 120 |
 
-`/fukarlec xp` · `/fukarlec bolt` · `/fukarlec vesz <id>` (vásárlás, utána fel is veszi) ·
+`/fukarlec xp` · `/fukarlec shop` · `/fukarlec buy <id>` (vásárlás, utána fel is veszi) ·
 `/fukarlec skin <id>` / `/fukarlec pack <id>` (megvett tétel felvétele, sosem vásárol)
 
 ## Telepítés

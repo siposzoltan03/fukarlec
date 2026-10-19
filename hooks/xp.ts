@@ -157,7 +157,7 @@ export function buy(ledger: Ledger, item: ShopItem): { ledger: Ledger } | { erro
 
 /** Puts on an owned `item`; spends nothing. */
 export function wear(ledger: Ledger, item: ShopItem): { ledger: Ledger } | { error: string } {
-  if (!owns(ledger, item)) return { error: `${item.name} még nincs meg, ${item.price} garas: /fukarlec vesz ${item.id}` }
+  if (!owns(ledger, item)) return { error: `${item.name} még nincs meg, ${item.price} garas: /fukarlec buy ${item.id}` }
   return { ledger: item.kind === 'skin' ? { ...ledger, skin: item.id } : { ...ledger, pack: item.id } }
 }
 

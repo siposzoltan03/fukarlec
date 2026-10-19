@@ -3,7 +3,7 @@ import type { Register } from 'claude-code'
 
 import { addMetrics, emptyMetrics, fetchActivity, fetchKeySpend, fetchPrices, makeConn, priceFor } from './litellm'
 import type { Activity, Conn, Day, Fetch, Metrics, Prices } from './litellm'
-import type { TokenUsage } from './advice'
+import type { Handover, TokenUsage } from './advice'
 import {
   cacheExpiryWarning,
   cacheSoonWarning,
@@ -11,6 +11,7 @@ import {
   cacheTtlMs,
   cacheCountdownDone,
   cacheWarmSince,
+  canonicalArgs,
   clearOrRewriteTip,
   clock,
   contextLine,
@@ -19,7 +20,10 @@ import {
   CONDENSE_RATIO,
   condenseTranscript,
   HANDOVER_SYSTEM,
+  HANDOVER_DIR,
+  handoverMarkdown,
   handoverPrompt,
+  handoverTitle,
   pickSummaryModel,
   restartViaSummaryCost,
   resumePrompt,
@@ -73,7 +77,7 @@ const MIN_REFRESH_MS = 10_000
 const TIP_EVERY_MS = 30 * 60_000
 const KEEP_MS = 40 * 86_400_000
 const PANE_ID = 'fukarlec-dashboard'
-/** A condensed transcript for /fukarlec újrakezd stays under ~140k tokens: room in Haiku's 200k window. */
+/** A condensed transcript for /fukarlec restart stays under ~140k tokens: room in Haiku's 200k window. */
 const MAX_HANDOVER_CHARS = 560_000
 const TURN_DISPLAY_MS = 8_000
 
@@ -294,7 +298,7 @@ export const register: Register = (on, options) => {
           : `fukarléc: ${SCOPE_NAMES[scope]} keret túllépve (${money(spentBy[scope])}/${money(budgets[scope])})`
         $io.toast(text, 12_000)
         $io.notify(text)
-        if (isBlocking) $io.toast('🔒 Új prompt csak /fukarlec engedd után.', 12_000)
+        if (isBlocking) $io.toast('🔒 Új prompt csak /fukarlec allow után.', 12_000)
       }
     }
   }
@@ -366,7 +370,7 @@ export const register: Register = (on, options) => {
       ...SHOP.filter(i => i.kind === 'pack').map(line),
       '',
       '👉 viseled · ✅ megvan · 🔒 megvehető',
-      'Vásárlás: /fukarlec vesz <id> · átöltözés (ingyen): /fukarlec skin <id>, /fukarlec pack <id>',
+      'Vásárlás: /fukarlec buy <id> · átöltözés (ingyen): /fukarlec skin <id>, /fukarlec pack <id>',
     ].join('\n')
   }
 
@@ -419,7 +423,7 @@ export const register: Register = (on, options) => {
   }
 
   const priceOf = (model: string) => priceFor(prices, model)
-  /** What /fukarlec újrakezd would cost for the next turns, estimated before the transcript is read. */
+  /** What /fukarlec restart would cost for the next turns, estimated before the transcript is read. */
   const estimateRestart = (contextTokens: number, model: string): number | undefined => {
     const condensed = Math.round(contextTokens * CONDENSE_RATIO)
     const small = pickSummaryModel(prices, condensed)
@@ -536,7 +540,7 @@ export const register: Register = (on, options) => {
     }
     await $.command.register({
       name: 'fukarlec',
-      description: 'LiteLLM költségriport: /fukarlec [hó | <N> | frissít | engedd | panel | xp | bolt | vesz <tétel>]',
+      description: 'LiteLLM költségriport: /fukarlec [<N> | refresh | allow | panel | tips | restart | handovers | xp | shop | buy <id>]',
     })
     await $.ui.open({ id: PANE_ID, title: '🪙 Fukarléc' }).catch(() => {})
     conn = makeConn({
@@ -744,7 +748,7 @@ export const register: Register = (on, options) => {
     const over = overScopes()
     if (over.length === 0 || (await $.store.get(`unlock:${snap.date}`)) !== undefined) return next(e)
     const names = over.map(s => SCOPE_NAMES[s]).join(', ')
-    return { drop: `🔒 Fukarléc: elfogyott a ${names} keret. Ha mégis kell: /fukarlec engedd (ma éjfélig, UTC, feloldja).` }
+    return { drop: `🔒 Fukarléc: elfogyott a ${names} keret. Ha mégis kell: /fukarlec allow (ma éjfélig, UTC, feloldja).` }
   }).catch(($, e, next) => next(e))
 
   // --- /fukarlec command -------------------------------------------------------
@@ -756,29 +760,31 @@ export const register: Register = (on, options) => {
         text: 'Fukarléc: ez a session nem LiteLLM proxyn fut (nincs ANTHROPIC_BASE_URL + ANTHROPIC_AUTH_TOKEN), nincs mit figyelni.',
       }
     }
-    const arg = e.args.trim().toLowerCase()
+    const arg = canonicalArgs(e.args)
 
     if (arg === 'help' || arg === '?') {
       return {
         text: [
-          '/fukarlec            – e havi riport',
-          '/fukarlec <N>        – az utolsó N nap',
-          '/fukarlec frissít    – adatok újratöltése',
-          '/fukarlec engedd     – keret feletti blokk feloldása mára',
-          '/fukarlec panel      – költség-dashboard megnyitása',
-          '/fukarlec tippek     – minden aktuális spórolási tipp és a mai küldetés',
-          '/fukarlec újrakezd   – egy kis modell átadást ír, aztán /clear és onnan folytatás (… sonnet: Sonnettel)',
-          '/fukarlec xp         – rangod és garasaid',
-          '/fukarlec bolt       – skinek és üzenet-packek',
-          '/fukarlec vesz <id>  – vásárlás garasért (utána fel is veszi)',
-          '/fukarlec skin <id>  – megvett skin felvétele · /fukarlec pack <id> – megvett pack felvétele (nem vásárol)',
+          '/fukarlec             – e havi riport',
+          '/fukarlec <N>         – az utolsó N nap',
+          '/fukarlec refresh     – adatok újratöltése',
+          '/fukarlec allow       – keret feletti blokk feloldása mára',
+          '/fukarlec panel       – költség-dashboard megnyitása',
+          '/fukarlec tips        – minden aktuális spórolási tipp és a mai küldetés',
+          '/fukarlec restart     – egy kis modell átadást ír, aztán /clear és onnan folytatás (… sonnet: Sonnettel)',
+          '/fukarlec handovers   – a legutóbbi átadások · … <id>: egy megnyitása · /fukarlec resume <id>: folytatás belőle',
+          '/fukarlec xp          – rangod és garasaid',
+          '/fukarlec shop        – skinek és üzenet-packek',
+          '/fukarlec buy <id>    – vásárlás garasért (utána fel is veszi)',
+          '/fukarlec skin <id>   – megvett skin felvétele · /fukarlec pack <id> – megvett pack felvétele (nem vásárol)',
+          '(A régi magyar parancsnevek is működnek: frissít, engedd, tippek, újrakezd, bolt, vesz.)',
           '',
           `Keretek: session ${money(budgets.session)}, napi ${money(budgets.daily)}, havi ${money(budgets.monthly)} · mód: ${isBlocking ? 'block' : 'warn'} (/config → fukarlec)`,
         ].join('\n'),
       }
     }
 
-    if (arg === 'újrakezd' || arg === 'újrakezd sonnet' || arg === 'restart' || arg === 'restart sonnet') {
+    if (arg === 'restart' || arg === 'restart sonnet') {
       const rows = await $.session.messages()
       if (rows.length === 0) return { text: 'Fukarléc: még nincs beszélgetés, amit át lehetne adni.' }
       const transcript = condenseTranscript(rows, MAX_HANDOVER_CHARS)
@@ -793,7 +799,12 @@ export const register: Register = (on, options) => {
       if (!reply.isAnswered) return { text: `Fukarléc: nem sikerült megírni az átadást (${reply.reason}); nem töröltem semmit.` }
       const now = await $.clock.now()
       const id = now.toString(36)
-      await $.store.set(`handover:${id}`, { at: now, model: small.name, text: reply.text })
+      const home = await $.env.get('HOME')
+      const path = home ? `${home}/${HANDOVER_DIR}/${id}.md` : undefined
+      const cwd = await $.session.cwd().catch(() => '')
+      const handover: Handover = { id, at: now, model: small.name, cwd, text: reply.text, ...(path ? { path } : {}) }
+      await $.store.set(`handover:${id}`, handover)
+      if (path) await $.fs.write(path, handoverMarkdown(handover)).catch(() => {})
       const cost =
         (reply.usage.input_tokens ?? 0) * small.price.input + (reply.usage.output_tokens ?? 0) * small.price.output
       // Run after this command has returned: clear the conversation, then continue from the handover.
@@ -803,7 +814,33 @@ export const register: Register = (on, options) => {
           await $.prompt.submit({ text: resumePrompt(id, reply.text) })
         })().catch(err => $io.toast(`Fukarléc: az újrakezdés félúton megállt (${String(err)}); a(z) ${id} átadás megvan.`, 20_000))
       })
-      return { text: `🧳 A(z) ${id} átadást a ${small.name} írta (~${money(cost)}). Törlöm a beszélgetést, és onnan folytatjuk…` }
+      return { text: `🧳 A(z) ${id} átadást a ${small.name} írta (~${money(cost)})${path ? `, mentve: ${path}` : ''}. Törlöm a beszélgetést, és onnan folytatjuk…` }
+    }
+
+    if (arg === 'handovers' || arg.startsWith('handovers ') || arg.startsWith('resume ')) {
+      const all: Handover[] = []
+      for (const key of await $.store.keys()) {
+        if (!key.startsWith('handover:')) continue
+        const h = (await $.store.get(key)) as Handover | undefined
+        if (h?.text) all.push({ ...h, id: h.id ?? key.slice('handover:'.length) })
+      }
+      all.sort((a, b) => b.at - a.at)
+      const [what, id = ''] = arg.split(/\s+/)
+      if (!id) {
+        if (all.length === 0) return { text: 'Fukarléc: még nincs átadás. A /fukarlec restart ír egyet.' }
+        const rows = all.slice(0, 10).map(h => {
+          const when = new Date(h.at).toISOString().replace('T', ' ').slice(0, 16)
+          return `  ${h.id} · ${when} · ${h.model.replace(/^.*\//, '')} · ${handoverTitle(h.text)}`
+        })
+        return { text: ['🧳 Átadások (a legújabbak elöl)', ...rows, '', 'Megnézni: /fukarlec handovers <id> · onnan folytatni: /fukarlec resume <id> · fájlok: ~/.claude/handovers/'].join('\n') }
+      }
+      const found = all.find(h => h.id === id)
+      if (!found) return { text: `Fukarléc: nincs ilyen átadás: ${id}. Lista: /fukarlec handovers` }
+      if (what === 'resume') {
+        $.clock.after(50, () => void $.prompt.submit({ text: resumePrompt(found.id, found.text) }).catch(() => {}))
+        return { text: `🧳 Folytatás a(z) ${found.id} átadásból…` }
+      }
+      return { text: [found.path ? `Fájl: ${found.path}` : '', handoverMarkdown(found)].filter(Boolean).join('\n\n') }
     }
 
     if (arg === 'panel' || arg === 'pane' || arg === 'dashboard') {
@@ -811,7 +848,7 @@ export const register: Register = (on, options) => {
       return { text: 'Dashboard panel megnyitva.' }
     }
 
-    if (arg === 'engedd') {
+    if (arg === 'allow') {
       const now = await $.clock.now()
       await $.store.set(`unlock:${utcDate(now)}`, { at: now })
       return { text: '🔓 Rendben, mára feloldva. Fukar bácsi csendben szenved.' }
@@ -821,7 +858,7 @@ export const register: Register = (on, options) => {
     if (!s) return { text: `Fukarléc: a LiteLLM nem válaszol (${lastError ?? 'ismeretlen hiba'}).` }
 
     const [verb = '', ...rest] = arg.split(/\s+/)
-    if (verb === 'tippek' || verb === 'tipp') {
+    if (verb === 'tips' || verb === 'tip') {
       const advice = await adviceFor($io, s)
       await update($, adviceAtom, () => advice)
       const quest = budgets.daily > 0 ? questLine(s) : undefined
@@ -833,18 +870,18 @@ export const register: Register = (on, options) => {
         ].join('\n'),
       }
     }
-    if (['xp', 'bolt', 'vesz', 'skin', 'pack'].includes(verb)) {
+    if (['xp', 'shop', 'buy', 'skin', 'pack'].includes(verb)) {
       const view = await creditXp($io, s)
       await update($, xpAtom, () => view)
       const l = ledger!
       if (budgets.daily <= 0) return { text: 'Fukarléc: XP csak napi kerettel jár (/config → fukarlec → napi keret).' }
 
       if (verb === 'xp') return { text: xpText(l) }
-      if (verb === 'bolt') return { text: shopText(l) }
+      if (verb === 'shop') return { text: shopText(l) }
 
       const id = rest.join(' ')
-      const matches = SHOP.filter(i => i.id === id && (verb === 'vesz' || i.kind === verb))
-      if (matches.length === 0) return { text: `Nincs ilyen tétel: "${id}". Nézd meg: /fukarlec bolt` }
+      const matches = SHOP.filter(i => i.id === id && (verb === 'buy' || i.kind === verb))
+      if (matches.length === 0) return { text: `Nincs ilyen tétel: "${id}". Nézd meg: /fukarlec shop` }
       if (matches.length > 1) {
         const ownsAll = matches.every(i => owns(l, i))
         return {
@@ -852,13 +889,13 @@ export const register: Register = (on, options) => {
         }
       }
       const item = matches[0]!
-      const result = verb === 'vesz' ? buy(l, item) : wear(l, item)
+      const result = verb === 'buy' ? buy(l, item) : wear(l, item)
       if ('error' in result) return { text: `🪙 ${result.error}` }
       await saveLedger($io, result.ledger)
       await update($, xpAtom, () => xpView(result.ledger))
       return {
         text:
-          verb === 'vesz'
+          verb === 'buy'
             ? `🛒 Megvetted és felvetted: ${item.name} (${item.price} garas). Maradt ${balance(result.ledger)}. Fukar bácsi könnyezik.`
             : `${item.kind === 'skin' ? '👕' : '💬'} Felvéve: ${item.name}.`,
       }
@@ -871,7 +908,7 @@ export const register: Register = (on, options) => {
       stale: false,
     }))
 
-    if (arg === 'frissít' || arg === 'frissit' || arg === 'refresh') {
+    if (arg === 'refresh') {
       return { text: statusLine(spendOf(s), budgets, isFun, false) }
     }
 
@@ -1045,8 +1082,8 @@ export const register: Register = (on, options) => {
         {restart && (
           <Text dimColor>
             {'   '}következő 10 kör: folytatás ~{money(restart.keep)} · /compact ~{money(restart.compact)} ·{' '}
-            {showRestart && restartCost !== undefined ? `/fukarlec újrakezd ~${money(restartCost)} · ` : ''}/clear ~
-            {money(restart.clear)} → {showRestart ? '/fukarlec újrakezd' : restart.best === 'compact' ? '/compact' : 'folytasd'}{' '}
+            {showRestart && restartCost !== undefined ? `/fukarlec restart ~${money(restartCost)} · ` : ''}/clear ~
+            {money(restart.clear)} → {showRestart ? '/fukarlec restart' : restart.best === 'compact' ? '/compact' : 'folytasd'}{' '}
             (új feladatnál /clear)
           </Text>
         )}

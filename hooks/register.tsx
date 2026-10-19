@@ -13,6 +13,14 @@ import {
   cacheWarmSince,
   clearOrRewriteTip,
   clock,
+  CONDENSE_RATIO,
+  condenseTranscript,
+  HANDOVER_SYSTEM,
+  handoverPrompt,
+  pickSummaryModel,
+  restartViaSummaryCost,
+  resumePrompt,
+  tokensOfText,
   restartCosts,
   compactEffectTip,
   contextGrowthTip,
@@ -62,6 +70,8 @@ const MIN_REFRESH_MS = 10_000
 const TIP_EVERY_MS = 30 * 60_000
 const KEEP_MS = 40 * 86_400_000
 const PANE_ID = 'fukarlec-dashboard'
+/** A condensed transcript for /fukarlec újrakezd stays under ~140k tokens: room in Haiku's 200k window. */
+const MAX_HANDOVER_CHARS = 560_000
 const TURN_DISPLAY_MS = 8_000
 
 type Snapshot = { at: number; keySpend: number; today: Day | undefined; activity: Activity; date: string }
@@ -195,7 +205,7 @@ export const register: Register = (on, options) => {
     showStatus($io)
     if (remaining <= 0 && expiredToldFor !== cacheWarmSinceAt) {
       expiredToldFor = cacheWarmSinceAt
-      const tip = clearOrRewriteTip(lastContextTokens, baseContextTokens, priceOf(lastModel))
+      const tip = clearOrRewriteTip(lastContextTokens, baseContextTokens, priceOf(lastModel), estimateRestart(lastContextTokens, lastModel))
       if (tip) $io.toast(isFun ? voice(tip, pack(), nowMs) : tip, 20_000)
       $io.redraw()
     }
@@ -406,6 +416,13 @@ export const register: Register = (on, options) => {
   }
 
   const priceOf = (model: string) => priceFor(prices, model)
+  /** What /fukarlec újrakezd would cost for the next turns, estimated before the transcript is read. */
+  const estimateRestart = (contextTokens: number, model: string): number | undefined => {
+    const condensed = Math.round(contextTokens * CONDENSE_RATIO)
+    const small = pickSummaryModel(prices, condensed)
+    const main = priceOf(model)
+    return small && main ? restartViaSummaryCost(condensed, baseContextTokens, small.price, main) : undefined
+  }
 
   /** Prices once a session, history once a day; each failure leaves the advice that needs it out. */
   async function loadExtras($io: Io, s: Snapshot) {
@@ -439,7 +456,7 @@ export const register: Register = (on, options) => {
       weekdayTip(history),
       parallelUseTip(sessionCost, keyDelta(s)),
       cacheWarmSinceAt > 0 && !isTurnRunning && nowMs > cacheWarmSinceAt + cacheTtl
-        ? clearOrRewriteTip(lastContextTokens, baseContextTokens, priceOf(lastModel))
+        ? clearOrRewriteTip(lastContextTokens, baseContextTokens, priceOf(lastModel), estimateRestart(lastContextTokens, lastModel))
         : undefined,
     ].filter((t): t is string => t !== undefined)
     const seed = Number(s.date.slice(8))
@@ -709,7 +726,15 @@ export const register: Register = (on, options) => {
     // An expired cache, said before the turn pays for it.
     if (conn && io && cacheWarmSinceAt > 0 && e.origin.kind === 'composer') {
       const idle = (await $.clock.now()) - cacheWarmSinceAt
-      const warning = cacheExpiryWarning(idle, lastContextTokens, priceOf(await $.session.model()), cacheTtl)
+      const model = await $.session.model()
+      const restart = estimateRestart(lastContextTokens, model)
+      const warning = cacheExpiryWarning(
+        idle,
+        lastContextTokens,
+        priceOf(model),
+        cacheTtl,
+        restart === undefined ? undefined : { cost: restart, baseTokens: baseContextTokens },
+      )
       await offerTip(io, `cache:${cacheWarmSinceAt}`, warning, true)
     }
     if (!isBlocking || !conn || !snap || (e.origin.kind !== 'composer' && e.origin.kind !== 'bridge')) return next(e)
@@ -739,6 +764,7 @@ export const register: Register = (on, options) => {
           '/fukarlec engedd     – keret feletti blokk feloldása mára',
           '/fukarlec panel      – költség-dashboard megnyitása',
           '/fukarlec tippek     – minden aktuális spórolási tipp és a mai küldetés',
+          '/fukarlec újrakezd   – egy kis modell átadást ír, aztán /clear és onnan folytatás (… sonnet: Sonnettel)',
           '/fukarlec xp         – rangod és garasaid',
           '/fukarlec bolt       – skinek és üzenet-packek',
           '/fukarlec vesz <id>  – vásárlás garasért (utána fel is veszi)',
@@ -747,6 +773,34 @@ export const register: Register = (on, options) => {
           `Keretek: session ${money(budgets.session)}, napi ${money(budgets.daily)}, havi ${money(budgets.monthly)} · mód: ${isBlocking ? 'block' : 'warn'} (/config → fukarlec)`,
         ].join('\n'),
       }
+    }
+
+    if (arg === 'újrakezd' || arg === 'újrakezd sonnet' || arg === 'restart' || arg === 'restart sonnet') {
+      const rows = await $.session.messages()
+      if (rows.length === 0) return { text: 'Fukarléc: még nincs beszélgetés, amit át lehetne adni.' }
+      const transcript = condenseTranscript(rows, MAX_HANDOVER_CHARS)
+      const small = pickSummaryModel(prices, tokensOfText(transcript.length), arg.endsWith('sonnet'))
+      if (!small) return { text: 'Fukarléc: a proxyn nincs olyan Haiku vagy Sonnet, amibe ez a beszélgetés belefér; nem töröltem semmit.' }
+      const reply = await $.model.complete({
+        model: small.name,
+        system: HANDOVER_SYSTEM,
+        prompt: handoverPrompt(transcript),
+        maxTokens: 4_000,
+      })
+      if (!reply.isAnswered) return { text: `Fukarléc: nem sikerült megírni az átadást (${reply.reason}); nem töröltem semmit.` }
+      const now = await $.clock.now()
+      const id = now.toString(36)
+      await $.store.set(`handover:${id}`, { at: now, model: small.name, text: reply.text })
+      const cost =
+        (reply.usage.input_tokens ?? 0) * small.price.input + (reply.usage.output_tokens ?? 0) * small.price.output
+      // Run after this command has returned: clear the conversation, then continue from the handover.
+      $.clock.after(50, () => {
+        void (async () => {
+          await $.command.run({ command: 'clear', args: '' })
+          await $.prompt.submit({ text: resumePrompt(id, reply.text) })
+        })().catch(err => $io.toast(`Fukarléc: az újrakezdés félúton megállt (${String(err)}); a(z) ${id} átadás megvan.`, 20_000))
+      })
+      return { text: `🧳 A(z) ${id} átadást a ${small.name} írta (~${money(cost)}). Törlöm a beszélgetést, és onnan folytatjuk…` }
     }
 
     if (arg === 'panel' || arg === 'pane' || arg === 'dashboard') {

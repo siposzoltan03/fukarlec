@@ -33,6 +33,10 @@ import {
   subagentTip,
   toolOutputTip,
   weekdayTip,
+  condenseTranscript,
+  pickSummaryModel,
+  restartViaSummaryCost,
+  restartWorthIt,
 } from '../hooks/advice'
 
 const NOW = Date.parse('2026-10-13T12:00:00Z')
@@ -468,3 +472,45 @@ describe('advice', () => {
     expect(voice('🧠 Opus túl sok.', packById('nav'), 0)).toBe('🧠 Hatósági javaslat: Opus túl sok.')
   })
 })
+
+describe('újrakezdés egy kis modell átadásából', () => {
+  const opus = { input: 4e-6, output: 2e-5, cacheRead: 2e-7, cacheWrite: 5e-6 }
+  const haiku = { input: 1e-6, output: 5e-6, cacheRead: 1e-7, cacheWrite: 1.25e-6, maxInput: 200_000 }
+  const sonnet = { input: 2e-6, output: 1e-5, cacheRead: 2e-7, cacheWrite: 2.5e-6, maxInput: 1_000_000 }
+  const prices = { 'claude-opus-5-5': opus, 'claude-haiku-4-5': haiku, 'claude-sonnet-5-5': sonnet }
+
+  test('the transcript keeps every word and clips long tool output', () => {
+    const rows = [
+      { role: 'user' as const, text: 'Fix the vendor sync retry.', toolUses: [] },
+      { role: 'assistant' as const, text: 'Reading the listener.', toolUses: [{ tool: 'Read', input: { file_path: 'src/a.ts' }, text: 'x'.repeat(5_000) }] },
+    ]
+    const t = condenseTranscript(rows, 100_000)
+    expect(t).toContain('USER: Fix the vendor sync retry.')
+    expect(t).toContain('[tool Read {"file_path":"src/a.ts"}]')
+    expect(t).toContain('[… 3500 characters clipped …]')
+    const long = condenseTranscript([...rows, { role: 'assistant' as const, text: 'y'.repeat(3_000) + 'END', toolUses: [] }], 2_000)
+    expect(long.startsWith('USER: Fix the vendor sync retry.')).toBe(true)
+    expect(long.endsWith('END')).toBe(true)
+  })
+
+  test('the cheapest small model with room is picked', () => {
+    expect(pickSummaryModel(prices, 100_000)?.name).toBe('claude-haiku-4-5')
+    expect(pickSummaryModel(prices, 180_000)?.name).toBe('claude-sonnet-5-5')
+    expect(pickSummaryModel(prices, 100_000, true)?.name).toBe('claude-sonnet-5-5')
+    expect(pickSummaryModel({ 'claude-opus-5-5': opus }, 10_000)).toBeUndefined()
+  })
+
+  test('priced against keep and /compact, suggested only when clearly cheaper', () => {
+    const restart = restartViaSummaryCost(105_000, 30_000, haiku, opus)
+    expect(Math.round(restart * 10_000)).toBe(3_326)
+    expect(restartWorthIt(restart, restartCosts(300_000, 30_000, opus, false))).toBe(true)
+    expect(restartWorthIt(restart, restartCosts(60_000, 30_000, opus, false))).toBe(false)
+    const tip = clearOrRewriteTip(300_000, 30_000, opus, restart)
+    expect(tip).toContain('/fukarlec újrakezd ~$0.33')
+    expect(tip).toContain('Ugyanazon a feladaton: /fukarlec újrakezd')
+    expect(cacheExpiryWarning(8 * 60_000, 300_000, opus, 5 * 60_000, { cost: restart, baseTokens: 30_000 })).toContain(
+      'Előtte /compact vagy /fukarlec újrakezd (~$0.33)?',
+    )
+  })
+})
+

@@ -54,6 +54,23 @@ folytatás/compact/clear tanács ezt azonnal jelzi.
   `/fukarlec tippek`-ben is látszik.
 - `/reload-plugins` után is tovább számol: az utolsó kör ideje sessionönként megmarad.
 
+### Újrakezdés átadásból
+Ha a cache már lejárt, egy nagy beszélgetés folytatása a fő modelleden az egészet újraírja, és a `/compact` is. A
+`/fukarlec újrakezd` ugyanezt egy kis modellel végzi:
+
+1. beolvassa a beszélgetést: minden elhangzott szót megtart, a hosszú tool-kimeneteknek csak az elejét és a végét;
+2. a proxy legolcsóbb Haikuja (ha abba nem fér bele, Sonnetje) átadást ír: cél, jelenlegi állapot, döntések, zsákutcák,
+   nyitott kérdések, következő lépések, fájlok;
+3. lefuttatja a `/clear`-t, és az átadásból folytatja, immár kicsi beszélgetésben.
+
+A `/fukarlec újrakezd sonnet` Sonnetet használ, ha a session sok kényes döntést tartalmazott. Minden átadás azonosítóval
+megmarad (`handover:<id>` a plugin tárolójában), így semmi nem vész el, ha az újrakezdés félúton megáll.
+
+Csak javasolja, magától sosem csinálja: ha a cache lejárt, a context legalább 50k token, és az újrakezdés a következő 10
+körre egyértelműen olcsóbb a folytatásnál és a `/compact`-nál is. Ilyenkor a folytatás/compact/újrakezdés/clear
+összevetés és a küldés előtti figyelmeztetés az árával együtt felajánlja. Új feladatnál továbbra is a `/clear` a
+legolcsóbb.
+
 ### Session-költés
 A session-érték a session saját köreiből számolódik, nem a kulcs teljes költéséből:
 

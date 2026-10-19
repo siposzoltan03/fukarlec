@@ -138,7 +138,14 @@ export async function fetchActivity(fetch: Fetch, conn: Conn, start: string, end
 }
 
 /** USD per token, as the proxy bills it. */
-export type Prices = { input: number; output: number; cacheRead: number; cacheWrite: number }
+export type Prices = {
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  /** The model's context window in tokens, when the proxy says. */
+  maxInput?: number
+}
 
 /** Every model's prices from `/model/info`, keyed by the model name the proxy serves it under. */
 export async function fetchPrices(fetch: Fetch, conn: Conn): Promise<Record<string, Prices>> {
@@ -153,6 +160,7 @@ export async function fetchPrices(fetch: Fetch, conn: Conn): Promise<Record<stri
       output: Number(i.output_cost_per_token ?? input * 5),
       cacheRead: Number(i.cache_read_input_token_cost ?? input * 0.1),
       cacheWrite: Number(i.cache_creation_input_token_cost ?? input * 1.25),
+      ...(Number(i.max_input_tokens) > 0 ? { maxInput: Number(i.max_input_tokens) } : {}),
     }
   }
   return prices

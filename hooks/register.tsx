@@ -546,11 +546,12 @@ export const register: Register = (on, options) => {
         .write(`${home}/.claude/fukarlec-ledger.json`, JSON.stringify({ exportedAt: await $.clock.now(), ledger: ledgerNow }))
         .catch(() => {})
     }
-    $.ui.toast(
+    // Said a little later: a toast drawn while the session screen is still coming up gets lost.
+    void $.clock.after(3000, () => $.ui.toast(
       '🪙 A Fukarléc mostantól a Frugalitas egyik módja. Telepítsd: /plugin install frugalitas --marketplace siposzoltan03/frugalitas, ' +
         'aztán /plugin uninstall fukarlec. A garasaid átjönnek, és Fukarléc módban indul.',
       { timeoutMs: 20_000 },
-    )
+    ))
     await $.command.register({
       name: 'fukarlec',
       description: 'LiteLLM költségriport: /fukarlec [<N> | refresh | allow | panel | tips | restart | handovers | xp | shop | buy <id>]',

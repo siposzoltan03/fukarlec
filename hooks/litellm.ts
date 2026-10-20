@@ -107,33 +107,43 @@ function toMetrics(m: any): Metrics {
 
 /** Per-day, per-model spend of the key's user, `start`..`end` inclusive (YYYY-MM-DD, UTC). */
 export async function fetchActivity(fetch: Fetch, conn: Conn, start: string, end: string): Promise<Activity> {
-  const days: Day[] = []
+  // A day can be split across two pages: its parts are added up under one date.
+  const byDate = new Map<string, Day>()
   let total = emptyMetrics()
   for (let page = 1; page <= 20; page++) {
     const body = await getJson(fetch, conn, `/user/daily/activity?start_date=${start}&end_date=${end}&page=${page}`)
     for (const r of body?.results ?? []) {
+      const date = String(r.date)
       const models: Record<string, Metrics> = {}
       for (const [name, entry] of Object.entries<any>(r?.breakdown?.models ?? {})) {
         models[name] = toMetrics(entry?.metrics)
       }
-      days.push({ date: String(r.date), metrics: toMetrics(r.metrics), models })
+      const seen = byDate.get(date)
+      if (!seen) {
+        byDate.set(date, { date, metrics: toMetrics(r.metrics), models })
+        continue
+      }
+      seen.metrics = addMetrics(seen.metrics, toMetrics(r.metrics))
+      for (const [name, m] of Object.entries(models)) {
+        const had = seen.models[name]
+        seen.models[name] = had ? addMetrics(had, m) : m
+      }
     }
     const meta = body?.metadata ?? {}
-    if (page === 1) {
-      total = toMetrics({
-        spend: meta.total_spend,
-        prompt_tokens: meta.total_prompt_tokens,
-        completion_tokens: meta.total_completion_tokens,
-        cache_read_input_tokens: meta.total_cache_read_input_tokens,
-        cache_creation_input_tokens: meta.total_cache_creation_input_tokens,
-        prompt_caching_savings_spend: meta.total_prompt_caching_savings_spend,
-        api_requests: meta.total_api_requests,
-        failed_requests: meta.total_failed_requests,
-      })
-    }
+    // LiteLLM's metadata totals cover this page's rows only, so they are added up over the pages.
+    total = addMetrics(total, toMetrics({
+      spend: meta.total_spend,
+      prompt_tokens: meta.total_prompt_tokens,
+      completion_tokens: meta.total_completion_tokens,
+      cache_read_input_tokens: meta.total_cache_read_input_tokens,
+      cache_creation_input_tokens: meta.total_cache_creation_input_tokens,
+      prompt_caching_savings_spend: meta.total_prompt_caching_savings_spend,
+      api_requests: meta.total_api_requests,
+      failed_requests: meta.total_failed_requests,
+    }))
     if (!meta.has_more) break
   }
-  days.sort((a, b) => a.date.localeCompare(b.date))
+  const days = [...byDate.values()].sort((a, b) => a.date.localeCompare(b.date))
   return { days, total }
 }
 

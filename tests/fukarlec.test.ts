@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On } from 'claude-code'
 
 import { inKind, mood, statusLine, streak, tips } from '../hooks/format'
-import { makeConn, parseCustomHeaders, priceFor } from '../hooks/litellm'
+import { fetchActivity, makeConn, parseCustomHeaders, priceFor } from '../hooks/litellm'
 import { BACSI_COLUMNS, BACSI_PIXEL_ROWS, BACSI_ROWS, bacsiMood, bacsiPixels, bacsiRasterCells } from '../hooks/bacsi'
 import { fill, PACKS, packById, voice } from '../hooks/packs'
 import { SKINS, skinById } from '../hooks/skins'
@@ -564,3 +564,34 @@ describe('saved handovers', () => {
     expect(canonicalArgs('7')).toBe('7')
   })
 })
+
+describe('LiteLLM daily activity over several pages', () => {
+  const day = (date: string, spend: number, model: string) => ({
+    date,
+    metrics: { spend, prompt_tokens: spend * 1000, api_requests: 1 },
+    breakdown: { models: { [model]: { metrics: { spend, prompt_tokens: spend * 1000, api_requests: 1 } } } },
+  })
+  const pages = [
+    { results: [day('2026-10-20', 1, 'opus'), day('2026-10-05', 20, 'opus')], metadata: { total_spend: 21, total_api_requests: 2, has_more: true } },
+    { results: [day('2026-10-05', 31, 'sonnet'), day('2026-10-03', 27, 'opus')], metadata: { total_spend: 58, total_api_requests: 2, has_more: false } },
+  ]
+  const fetch = async (url: string) => {
+    const page = Number(/[?&]page=(\d+)/.exec(url)?.[1] ?? 1)
+    return { ok: true, status: 200, text: JSON.stringify(pages[page - 1]) } as never
+  }
+
+  test('the total adds up every page, not just the first', async () => {
+    const a = await fetchActivity(fetch, { baseUrl: 'https://l.example', headers: {} }, '2026-10-01', '2026-10-20')
+    expect(a.total.spend).toBe(79)
+    expect(a.total.requests).toBe(4)
+  })
+
+  test('a day split across two pages is one day', async () => {
+    const a = await fetchActivity(fetch, { baseUrl: 'https://l.example', headers: {} }, '2026-10-01', '2026-10-20')
+    expect(a.days.map(d => d.date)).toEqual(['2026-10-03', '2026-10-05', '2026-10-20'])
+    const oct5 = a.days[1]!
+    expect(oct5.metrics.spend).toBe(51)
+    expect(Object.keys(oct5.models).sort()).toEqual(['opus', 'sonnet'])
+  })
+})
+

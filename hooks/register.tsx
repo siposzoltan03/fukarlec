@@ -538,6 +538,19 @@ export const register: Register = (on, options) => {
       model: () => $.session.model(),
       redraw: () => $.ui.invalidate('ui.render'),
     }
+    // Fukarléc now lives on as a mode of Frugalitas: hand the garas over for it to fold in, and say where it went.
+    const home = await $.env.get('HOME')
+    const ledgerNow = await $.store.get(XP_KEY)
+    if (home && ledgerNow) {
+      await $.fs
+        .write(`${home}/.claude/fukarlec-ledger.json`, JSON.stringify({ exportedAt: await $.clock.now(), ledger: ledgerNow }))
+        .catch(() => {})
+    }
+    $.ui.toast(
+      '🪙 A Fukarléc mostantól a Frugalitas egyik módja. Telepítsd: /plugin install frugalitas --marketplace siposzoltan03/frugalitas, ' +
+        'aztán /plugin uninstall fukarlec. A garasaid átjönnek, és Fukarléc módban indul.',
+      { timeoutMs: 20_000 },
+    )
     await $.command.register({
       name: 'fukarlec',
       description: 'LiteLLM költségriport: /fukarlec [<N> | refresh | allow | panel | tips | restart | handovers | xp | shop | buy <id>]',

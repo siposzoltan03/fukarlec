@@ -1,5 +1,10 @@
 # 🪙 fukarléc
 
+> **A Fukarléc beköltözött a Frugalitasba.** Mostantól a [Frugalitas](https://github.com/siposzoltan03/frugalitas) egyik
+> módja: `/plugin install frugalitas --marketplace siposzoltan03/frugalitas`, majd `/plugin uninstall fukarlec`.
+> A 0.2.0 kiadás átadja a garasaidat (`~/.claude/fukarlec-ledger.json`), a Frugalitas pedig Fukarléc módban indul.
+> Váltás: `/frugal mode fukarlec` vagy `/frugal mode frugalitas`.
+
 Claude Code plugin, ami a LiteLLM proxy saját költségkönyveléséből figyeli, mennyibe kerülsz.
 Csak LiteLLM-en futó sessionben aktív (`ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN`, opcionálisan `ANTHROPIC_CUSTOM_HEADERS`),
 máshol némán nem csinál semmit.

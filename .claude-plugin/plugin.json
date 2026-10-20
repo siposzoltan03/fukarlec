@@ -1,8 +1,10 @@
 {
   "name": "fukarlec",
-  "version": "0.1.6",
-  "description": "Fukarléc: LiteLLM pay-as-you-go költségfigyelő — status line, budget-őr, /fukarlec riport, spórolási tippek.",
-  "author": { "name": "Zoltán Sipos" },
+  "version": "0.2.0",
+  "description": "Fukarléc: mostantól a Frugalitas egyik módja (/frugal mode fukarlec). Ez az utolsó kiadás: átadja a garasaidat a Frugalitasnak.",
+  "author": {
+    "name": "Zoltán Sipos"
+  },
   "types": "./types/index.d.ts",
   "userConfig": {
     "sessionBudget": {
@@ -27,7 +29,10 @@
       "type": "string",
       "title": "Keret felett",
       "description": "warn: csak szól; block: új promptot nem enged, amíg /fukarlec engedd fel nem oldja.",
-      "options": ["warn", "block"],
+      "options": [
+        "warn",
+        "block"
+      ],
       "default": "warn"
     },
     "expensiveTurn": {

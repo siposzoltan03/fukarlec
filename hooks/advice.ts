@@ -414,23 +414,30 @@ export function compactEffectTip(before: readonly number[], after: readonly numb
 
 // --- Napi küldetések ---------------------------------------------------------
 
-export type Quest = { id: string; text: string; done: (day: Day, dailyBudget: number) => boolean }
+export type Quest = {
+  id: string
+  text: string
+  done: (day: Day, dailyBudget: number) => boolean
+  /** The day's own measured value, so the quest line shows how far along it is. */
+  progress: (day: Day) => string
+}
 
 const opusShare = (d: Day) => {
   const opus = Object.entries(d.models).filter(([n]) => /opus/i.test(n)).reduce((n, [, m]) => n + m.spend, 0)
   return d.metrics.spend > 0 ? opus / d.metrics.spend : 0
 }
 const cacheHit = (d: Day) => (d.metrics.promptTokens > 0 ? d.metrics.cacheRead / d.metrics.promptTokens : 0)
+const pct = (x: number) => `${Math.round(x * 100)}%`
 const modelsUsed = (d: Day) => Object.values(d.models).filter(m => m.spend > 0.05).length
 
 export const QUEST_XP = 5
 
 export const QUESTS: readonly Quest[] = [
-  { id: 'opus', text: 'maradj 50% Opus alatt', done: d => opusShare(d) < 0.5 },
-  { id: 'cache', text: 'legyen 85% fölött a cache hit', done: d => cacheHit(d) >= 0.85 },
-  { id: 'fel', text: 'költs a napi keret felénél kevesebbet', done: (d, b) => b > 0 && d.metrics.spend <= b / 2 },
-  { id: 'modell', text: 'használj legfeljebb 2 modellt', done: d => modelsUsed(d) <= 2 },
-  { id: 'hiba', text: 'egyetlen hibás kérés se legyen', done: d => d.metrics.failed === 0 },
+  { id: 'opus', text: 'maradj 50% Opus alatt', done: d => opusShare(d) < 0.5, progress: d => `${pct(opusShare(d))} Opus` },
+  { id: 'cache', text: 'legyen 85% fölött a cache hit', done: d => cacheHit(d) >= 0.85, progress: d => `ma ${pct(cacheHit(d))}` },
+  { id: 'fel', text: 'költs a napi keret felénél kevesebbet', done: (d, b) => b > 0 && d.metrics.spend <= b / 2, progress: d => `$${d.metrics.spend.toFixed(2)}` },
+  { id: 'modell', text: 'használj legfeljebb 2 modellt', done: d => modelsUsed(d) <= 2, progress: d => `${modelsUsed(d)} modell` },
+  { id: 'hiba', text: 'egyetlen hibás kérés se legyen', done: d => d.metrics.failed === 0, progress: d => `${d.metrics.failed} hibás` },
 ]
 
 /** The day's quest, the same for everyone on that day. */

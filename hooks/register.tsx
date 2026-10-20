@@ -447,7 +447,7 @@ export const register: Register = (on, options) => {
   function questLine(s: Snapshot): string | undefined {
     if (budgets.daily <= 0) return undefined
     const q = questFor(s.date)
-    const sofar = s.today ? (q.done(s.today, budgets.daily) ? ' · eddig ✅' : ' · eddig ❌') : ''
+    const sofar = s.today ? ` · eddig ${q.progress(s.today)} ${q.done(s.today, budgets.daily) ? '✅' : '❌'}` : ''
     return `🎯 Mai küldetés: ${q.text} (+${QUEST_XP} garas)${sofar}`
   }
 
@@ -1069,7 +1069,7 @@ export const register: Register = (on, options) => {
             {contextLine(contextTokens, contextWindow, priceOf(sessionModel), progressBar(contextTokens / contextWindow, 10))}
           </Text>
         )}
-        <Text dimColor>Cache: {cacheHit}% hit, {money(activity.total.cacheSaved)} megtakarítás</Text>
+        <Text dimColor>Cache (hó): {cacheHit}% hit, {money(activity.total.cacheSaved)} megtakarítás</Text>
         {cacheWarmSinceAt === 0 && !isTurnRunning && <Text dimColor>⏳ Cache: az első kör végén indul</Text>}
         {isTurnRunning && <Text dimColor>⏳ Cache: friss (fut a kör)</Text>}
         {cacheLeft !== undefined && (

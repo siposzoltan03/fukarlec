@@ -471,6 +471,13 @@ describe('advice', () => {
     }
   })
 
+  test('the cache quest shows the day\'s own hit rate, not the month\'s', async () => {
+    const cache = QUESTS.find(q => q.id === 'cache')!
+    const day = { date: '2026-10-20', metrics: { ...metrics(1), promptTokens: 828_378, cacheRead: 552_953 }, models: {} } as Day
+    expect(cache.progress(day)).toBe('ma 67%')
+    expect(cache.done(day, 25)).toBe(false)
+  })
+
   test('tips speak in the pack voice', async () => {
     expect(voice('📈 Ezzel a tempóval sok lesz.', packById('paraszt'), 2)).toBe('📈 Ezzel a tempóval sok lesz.')
     expect(voice('📈 Ezzel a tempóval sok lesz.', packById('nagymama'), 0)).toBe('📈 Kisfiam, ezzel a tempóval sok lesz.')
